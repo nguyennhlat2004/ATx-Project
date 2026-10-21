@@ -13,7 +13,7 @@ local upgradeAll = game:GetService("ReplicatedStorage").RemoteFunctions.UpgradeA
 
 local API_CONFIG = {
     BaseUrl = "https://api-nxswebhook.nhatbinhduong37.workers.dev",
-    WebUrl = "https://api-nxswebhook.oneapp.dev/",
+    Token = "TDShYgpvyfa19gjSI15-OcHCV_TtJH-5nk7T2A_kU14",
     UpdatePath = "/api/update",
     HeartbeatPath = "/api/heartbeat",
     Timeout = 10,
@@ -24,15 +24,12 @@ local API_CONFIG = {
 }
 local API_CONFIG_FILE = "NexusStella_Api.json"
 
-local TOKEN = ""
+local TOKEN = API_CONFIG.Token
 local tokenLinked = false
 local webhookEnabled = false
-local CONFIG_FILE = "Nexus Stella - Graden Tower Defense.json"
-local CONFIG_FILE_ALT = "NexusStella_GardenTD_Token.json"
-local CONFIG_TXT = "NexusStella_Token.txt"
 local FARM_URL_MEDIUM = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/Volcano-Medium.lua"
 local FARM_URL_HARD = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/Volcano-Hard.lua"
-local FARM_URL_ACID_L4 = "https://raw.githubusercontent.com/nguyennhlat2004/ATx-Project/refs/heads/main/AcidRoom-Level4.lua"
+local FARM_URL_ACID_L4 = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/AcidRoom-Level4.lua"
 local currentFarm = "Volcano"
 local selectedAcidLevel = "Level 4"
 local selectedFarmMode = "Medium"
@@ -93,70 +90,6 @@ local function cleanToken(val)
     return s
 end
 
-local function extractTokenFromTable(data)
-    if type(data) ~= "table" then return "" end
-    local keys = {"Token", "token", "TOKEN", "WebhookToken", "webhookToken"}
-    for _, k in ipairs(keys) do
-        if data[k] ~= nil and tostring(data[k]) ~= "" then
-            return cleanToken(data[k])
-        end
-    end
-    return ""
-end
-
-local function loadConfig()
-    local paths = {CONFIG_FILE, CONFIG_FILE_ALT, CONFIG_TXT}
-    for _, path in ipairs(paths) do
-        if fileExists(path) then
-            local raw = readFileSafe(path)
-            if raw and raw ~= "" then
-                local trimmed = raw:match("^%s*(.-)%s*$") or raw
-                if trimmed:sub(1, 1) == "{" then
-                    local ok, decoded = pcall(function()
-                        return HttpService:JSONDecode(trimmed)
-                    end)
-                    if ok and type(decoded) == "table" then
-                        local tok = extractTokenFromTable(decoded)
-                        if tok ~= "" then
-                            return decoded, tok, path
-                        end
-                        return decoded, "", path
-                    end
-                else
-                    local tok = cleanToken(trimmed)
-                    if tok ~= "" then
-                        return {Token = tok}, tok, path
-                    end
-                end
-            end
-        end
-    end
-    return {}, "", nil
-end
-
-local function saveConfig(tokenOverride)
-    local tok = cleanToken(tokenOverride ~= nil and tokenOverride or TOKEN)
-    TOKEN = tok
-    local payload = HttpService:JSONEncode({
-        Token = tok,
-        token = tok,
-        SavedAt = os.time()
-    })
-    writeFileSafe(CONFIG_FILE, payload)
-    writeFileSafe(CONFIG_FILE_ALT, payload)
-    if tok ~= "" then
-        writeFileSafe(CONFIG_TXT, tok)
-    end
-    return tok
-end
-
-do
-    local _, tok = loadConfig()
-    if tok ~= "" then
-        TOKEN = tok
-    end
-end
-
 do
     if fileExists(API_CONFIG_FILE) then
         local raw = readFileSafe(API_CONFIG_FILE)
@@ -169,9 +102,10 @@ do
                 if type(base) == "string" and base:sub(1, 8) == "https://" then
                     API_CONFIG.BaseUrl = cleanToken(base)
                 end
-                local web = decoded.WebUrl or decoded.webUrl
-                if type(web) == "string" and web:sub(1, 8) == "https://" then
-                    API_CONFIG.WebUrl = cleanToken(web)
+                local tok = decoded.Token or decoded.token
+                if type(tok) == "string" and cleanToken(tok) ~= "" then
+                    API_CONFIG.Token = cleanToken(tok)
+                    TOKEN = API_CONFIG.Token
                 end
             end
         end
@@ -195,7 +129,81 @@ local function getCashAmount()
     return cleanNumber(cash.Value)
 end
 
-local function getSeedsAmount()
+local function stripRichText(text)
+    local t = tostring(text or "")
+    t = t:gsub("<[^>]->", "")
+    return t
+end
+
+local function parseAmountText(text)
+    local t = stripRichText(text):gsub(",", ""):gsub("%s", "")
+    local num, suf = t:match("(%d+%.?%d*)([KkMmBbTt]?)")
+    if not num then
+        return nil, false
+    end
+    local n = tonumber(num)
+    if not n then
+        return nil, false
+    end
+    local mult = {k = 1e3, m = 1e6, b = 1e9, t = 1e12}
+    if suf ~= "" then
+        n = n * (mult[string.lower(suf)] or 1)
+        return n, true
+    end
+    return n, false
+end
+
+local function getCurrencyFrame(name)
+    local ok, frame = pcall(function()
+        return player.PlayerGui.GameGui.Screen.Bottom.CurrencyDisplay:FindFirstChild(name)
+    end)
+    if ok then
+        return frame
+    end
+    return nil
+end
+
+local function readDisplayAmount(name)
+    local frame = getCurrencyFrame(name)
+    if not frame then
+        return nil, nil
+    end
+    local best, bestText, bestLen = nil, nil, -1
+    local ok, list = pcall(function()
+        local out = {frame}
+        for _, d in ipairs(frame:GetDescendants()) do
+            out[#out + 1] = d
+        end
+        return out
+    end)
+    if not ok or type(list) ~= "table" then
+        return nil, nil
+    end
+    for _, obj in ipairs(list) do
+        local okText, raw = pcall(function()
+            if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                return obj.Text
+            end
+            return nil
+        end)
+        if okText and type(raw) == "string" then
+            local clean = stripRichText(raw)
+            local n = parseAmountText(clean)
+            if n then
+                local digits = #(clean:gsub("%D", ""))
+                if digits > bestLen then
+                    best, bestText, bestLen = n, clean, digits
+                end
+            end
+        end
+    end
+    if bestText then
+        bestText = bestText:gsub("^%s+", ""):gsub("%s+$", "")
+    end
+    return best, bestText
+end
+
+local function getSeedsFromLeaderstats()
     local ls = player:FindFirstChild("leaderstats")
     if not ls then
         return nil
@@ -217,11 +225,22 @@ local function getSeedsAmount()
         return value
     end
     if type(value) == "string" then
-        local cleaned = value:gsub(",", ""):gsub("%s", "")
-        local n = tonumber(cleaned)
+        local n = parseAmountText(value)
         if n and n >= 0 then
             return n
         end
+    end
+    return nil
+end
+
+local function getSeedsAmount()
+    local v = getSeedsFromLeaderstats()
+    if v ~= nil then
+        return v
+    end
+    local n = readDisplayAmount("SeedsDisplay")
+    if n and n >= 0 then
+        return n
     end
     return nil
 end
@@ -1656,87 +1675,16 @@ acidToggle = TabMain:AddToggle({
     end
 })
 
-local tokenBox = TabSetting:AddTextBox({
-    Name = "Enter Your Token",
-    Default = TOKEN,
-    PlaceholderText = "Enter Your Token",
-    ClearText = false,
-    Callback = function(Value)
-        local tok = cleanToken(Value)
-        if tok == "" then return end
-        TOKEN = tok
-        saveConfig(tok)
-        resetSync()
+local function formatAmount(n)
+    if n == nil then
+        return "N/A"
     end
-})
-
-pcall(function()
-    if tokenBox and tokenBox.OnChanging then
-        tokenBox.OnChanging = function(text)
-            return cleanToken(text)
-        end
-    end
-end)
-
-task.spawn(function()
-    task.wait(0.35)
-    pcall(function()
-        local gui = game:GetService("CoreGui"):FindFirstChild("redz Library V5")
-        if not gui then return end
-        for _, obj in ipairs(gui:GetDescendants()) do
-            if obj:IsA("TextBox") and (obj.PlaceholderText == "Enter Your Token" or obj.PlaceholderText == "Input") then
-                if TOKEN ~= "" and (obj.Text == "" or obj.Text == nil) then
-                    obj.Text = TOKEN
-                end
-            end
-        end
-    end)
-end)
-
-local function readGuiToken()
-    local guiToken = TOKEN
-    pcall(function()
-        local gui = game:GetService("CoreGui"):FindFirstChild("redz Library V5")
-        if not gui then return end
-        for _, obj in ipairs(gui:GetDescendants()) do
-            if obj:IsA("TextBox") and obj.PlaceholderText == "Enter Your Token" then
-                local t = cleanToken(obj.Text)
-                if t ~= "" then
-                    guiToken = t
-                end
-            end
-        end
-    end)
-    return cleanToken(guiToken)
+    local whole = math.floor(n + 0.5)
+    local str = tostring(whole)
+    local out = str:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+    out = out:gsub("^,", "")
+    return out
 end
-
-local function copyText(text)
-    local ok = false
-    pcall(function()
-        if setclipboard then
-            setclipboard(text)
-            ok = true
-        elseif toclipboard then
-            toclipboard(text)
-            ok = true
-        elseif Clipboard and Clipboard.set then
-            Clipboard.set(text)
-            ok = true
-        end
-    end)
-    return ok
-end
-
-TabSetting:AddButton({
-    Name = "Linked Token",
-    Callback = function()
-        local guiToken = readGuiToken()
-        if guiToken == "" then return end
-        TOKEN = guiToken
-        saveConfig(guiToken)
-        resetSync()
-    end
-})
 
 TabSetting:AddToggle({
     Name = "WebHook",
@@ -1744,11 +1692,6 @@ TabSetting:AddToggle({
     Flag = "WebHookEnabled",
     Callback = function(Value)
         if Value then
-            local guiToken = readGuiToken()
-            if guiToken ~= "" and guiToken ~= TOKEN then
-                TOKEN = guiToken
-                saveConfig(guiToken)
-            end
             resetSync()
             webhookEnabled = true
         else
@@ -1757,12 +1700,91 @@ TabSetting:AddToggle({
     end
 })
 
+local seedParagraph = TabSetting:AddParagraph({"Seed", "N/A"})
+local traitParagraph = TabSetting:AddParagraph({"Trait Token", "N/A"})
+local webhookParagraph = TabSetting:AddParagraph({"WebHook Status", "Off"})
+
+local showCurrencyRunning = false
+
+local function forceShowCurrency()
+    pcall(function()
+        local cd = player.PlayerGui.GameGui.Screen.Bottom.CurrencyDisplay
+        if cd:IsA("GuiObject") and cd.Visible ~= true then
+            cd.Visible = true
+        end
+        for _, n in ipairs({"TraitTokensDisplay", "SeedsDisplay"}) do
+            local f = cd:FindFirstChild(n)
+            if f and f:IsA("GuiObject") and f.Visible ~= true then
+                f.Visible = true
+            end
+        end
+    end)
+end
+
 TabSetting:AddButton({
-    Name = "WebHook Link",
+    Name = "Show Seed And TraitToken",
     Callback = function()
-        copyText(API_CONFIG.WebUrl)
+        forceShowCurrency()
+        if showCurrencyRunning then return end
+        showCurrencyRunning = true
+        task.spawn(function()
+            while showCurrencyRunning do
+                forceShowCurrency()
+                task.wait(0.2)
+            end
+        end)
     end
 })
+
+local function webhookStatusText()
+    if not webhookEnabled then
+        return "Off"
+    end
+    if not apiReady() or TOKEN == "" then
+        return "API not configured"
+    end
+    if syncState.authFailed then
+        return "Token rejected (" .. tostring(syncState.lastStatus) .. ")"
+    end
+    if getSeedsAmount() == nil then
+        return "Cannot read Seed"
+    end
+    local st = tostring(syncState.lastStatus or "")
+    if st == "ok" and syncState.lastSentSeed ~= nil then
+        return "Sent: " .. formatAmount(syncState.lastSentSeed) .. " (" .. tostring(player.Name) .. ")"
+    end
+    if st:sub(1, 6) == "retry_" then
+        return "Network error, retrying (" .. st:sub(7) .. ")"
+    end
+    if st:sub(1, 12) == "bad_request_" then
+        return "Bad request (" .. st:sub(13) .. ")"
+    end
+    return "Sending..."
+end
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            local seed = getSeedsAmount()
+            local seedText = formatAmount(seed)
+            if seed == nil then
+                local _, raw = readDisplayAmount("SeedsDisplay")
+                if raw then seedText = raw end
+            end
+            seedParagraph:SetDesc(seedText)
+            local tn, traw = readDisplayAmount("TraitTokensDisplay")
+            if traw and traw ~= "" then
+                traitParagraph:SetDesc(traw)
+            elseif tn then
+                traitParagraph:SetDesc(formatAmount(tn))
+            else
+                traitParagraph:SetDesc("N/A")
+            end
+            webhookParagraph:SetDesc(webhookStatusText())
+        end)
+        task.wait(0.5)
+    end
+end)
 
 TabSetting:AddButton({
     Name = "Reload Farm Profile",
@@ -1773,16 +1795,6 @@ TabSetting:AddButton({
         end
     end
 })
-
-task.spawn(function()
-    local _, tok = loadConfig()
-    if tok ~= "" then
-        TOKEN = tok
-    end
-    if TOKEN ~= "" then
-        resetSync()
-    end
-end)
 
 task.spawn(function()
     while true do
