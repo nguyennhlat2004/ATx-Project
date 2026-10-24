@@ -1655,6 +1655,7 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
     Stage2 = {
         TriggerZ = -147.468,
         Compare = "less",
+        MinWave = 30,
         EnemyMatch = "enemy",
         ConfirmChecks = 2,
         SellAll = true,
@@ -2175,7 +2176,7 @@ local function runFarmProfile(profile)
     }
 
     local stage2Cfg = type(profile.Stage2) == "table" and profile.Stage2 or nil
-    local stageState = {stage = 1, triggered = false}
+    local stageState = {stage = 1, triggered = false, stage1Done = false}
 
     local function stillInGame()
         if not inGame then
@@ -2471,9 +2472,11 @@ local function runFarmProfile(profile)
     if stage2Cfg then
         task.spawn(function()
             local need = tonumber(stage2Cfg.ConfirmChecks) or 2
+            local minWave = tonumber(stage2Cfg.MinWave) or 0
             local streak = 0
             while autoFarmEnabled and inGame and not stageState.triggered do
-                if enemyPassed(stage2Cfg) then
+                local armed = stageState.stage1Done and getWaveNumber() >= minWave
+                if armed and enemyPassed(stage2Cfg) then
                     streak = streak + 1
                     if streak >= need then
                         stageState.triggered = true
@@ -2544,6 +2547,7 @@ local function runFarmProfile(profile)
     end
 
     runEvents(profile.Events)
+    stageState.stage1Done = true
 
     while autoFarmEnabled and inGame and not isVisible("GameGui.Screen.Middle.GameEnd") do
         if stage2Cfg and stageState.triggered and stageState.stage == 1 then
