@@ -827,28 +827,40 @@ local function getEntitiesFolder()
         end
     end
     local best, bestN = nil, -1
-    pcall(function()
-        for _, ch in ipairs(workspace:GetChildren()) do
-            if ch.Name == "Map" then
-                local e = ch:FindFirstChild("Entities")
-                if e then
-                    local n = #e:GetChildren()
-                    if n > bestN then
-                        best, bestN = e, n
-                    end
-                end
+    local function consider(e)
+        if not e then
+            return
+        end
+        local n = 0
+        for _, k in ipairs(e:GetChildren()) do
+            local nm = tostring(k.Name)
+            if nm:sub(1, 5) == "unit_" or nm:sub(1, 6) == "enemy_" then
+                n = n + 1
             end
         end
-        if not best then
-            best = workspace:FindFirstChild("Entities")
+        if n > bestN then
+            best, bestN = e, n
         end
+    end
+    pcall(function()
+        local ctx = workspace:FindFirstChild("Contexts")
+        if ctx then
+            for _, c in ipairs(ctx:GetChildren()) do
+                consider(c:FindFirstChild("Entities"))
+            end
+        end
+        for _, ch in ipairs(workspace:GetChildren()) do
+            if ch.Name == "Map" then
+                consider(ch:FindFirstChild("Entities"))
+            end
+        end
+        consider(workspace:FindFirstChild("Entities"))
         if not best then
-            local map = workspace:FindFirstChild("Map")
-            best = map and map:FindFirstChild("Entities", true)
+            consider(workspace:FindFirstChild("Entities", true))
         end
     end)
     entitiesCache.folder = best
-    entitiesCache.at = os.clock()
+    entitiesCache.at = bestN > 0 and os.clock() or -100
     return best
 end
 
