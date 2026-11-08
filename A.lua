@@ -814,7 +814,7 @@ local function getWaveNumber()
     return 0
 end
 
-local entitiesCache = {folder = nil, at = -100}
+local entitiesCache = {folder = nil, at = -100, night = false}
 
 local function getCurrentContext()
     local best, bestN, hasE = nil, -1, false
@@ -835,6 +835,21 @@ local function getCurrentContext()
 end
 
 local function getEntitiesFolder()
+    if not entitiesCache.night then
+        local ok, folder = pcall(function()
+            return workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Entities")
+        end)
+        if ok and folder then
+            return folder
+        end
+        local ok2, folder2 = pcall(function()
+            return workspace:FindFirstChild("Entities")
+        end)
+        if ok2 then
+            return folder2
+        end
+        return nil
+    end
     local c = entitiesCache.folder
     if c and os.clock() - entitiesCache.at < 1 then
         local okP, par = pcall(function()
@@ -852,22 +867,8 @@ local function getEntitiesFolder()
         end)
     end
     if not best then
-        local bestN = -1
         pcall(function()
-            for _, ch in ipairs(workspace:GetChildren()) do
-                if ch.Name == "Map" then
-                    local e = ch:FindFirstChild("Entities")
-                    if e then
-                        local n = #e:GetChildren()
-                        if n > bestN then
-                            best, bestN = e, n
-                        end
-                    end
-                end
-            end
-            if not best then
-                best = workspace:FindFirstChild("Entities")
-            end
+            best = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Entities")
         end)
     end
     entitiesCache.folder = best
@@ -1133,14 +1134,7 @@ local function waitForGameStart(difficulty)
         if gameEndShown() then
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
-                pcall(function()
-                    local cur = getCurrentContext()
-                    if cur then
-                        restartGame:InvokeServer(cur, false)
-                    else
-                        restartGame:InvokeServer()
-                    end
-                end)
+                pcall(function() restartGame:InvokeServer() end)
                 waitUntilHidden("GameGui.Screen.Middle.GameEnd")
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
@@ -2231,6 +2225,7 @@ local EE_NIGHT = {
             fallback = {
                 Name = "Enchanted Encounter Night ( Level 5 )",
                 Engine = "slots",
+                Night = true,
                 Difficulty = "dif_impossible",
                 StopAutoSkipAtWave = 33,
                 DefaultAngle = {-math.pi, 0, -math.pi},
@@ -2311,6 +2306,7 @@ EE_NIGHT.load = function(level)
         return nil, nil
     end
     data.Difficulty = data.Difficulty or "dif_impossible"
+    data.Night = true
     return data, url
 end
 
@@ -3407,7 +3403,7 @@ local function eeWaitForGameStart(difficulty)
             farmStatusText = "Game End | Restart"
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
-                local cur = getCurrentContext()
+                local cur = entitiesCache.night and getCurrentContext() or nil
                 if cur then
                     eeInvoke(restartGame, 5, cur, false)
                 else
@@ -3452,6 +3448,8 @@ function runSlotFarm(profile, freshStart)
     local difficulty = profile.Difficulty or "dif_impossible"
     local limits = type(profile.Limit) == "table" and profile.Limit or {}
 
+    entitiesCache.night = profile.Night == true
+    entitiesCache.at = -100
     farmStatusText = "Waiting Game Start"
     local restarted = eeWaitForGameStart(difficulty)
     entitiesCache.at = -100
@@ -3775,7 +3773,7 @@ function runSlotFarm(profile, freshStart)
                 acted = true
                 return
             end
-            if eeClaimSlot(slot, claimed, 2.5) or (slot.tries >= 3 and eeClaimSlot(slot, claimed, 1e9)) then
+            if eeClaimSlot(slot, claimed, 2.5) or (entitiesCache.night and slot.tries >= 3 and eeClaimSlot(slot, claimed, 1e9)) then
                 slot.done = true
                 acted = true
                 return
