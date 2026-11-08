@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
@@ -16,6 +17,11 @@ local DefaultStates = {
     Lever = false, Items = false, ChestBox = false, Fuse = false, FullBright = false,
     BoostSpeed = false, RestoreCam = false, CamSensitivity = 50, CamDist = 10,
     FigureESP = false, PlayerESP = false, InstantInteract = false,
+
+    RushESP = false, AmbushESP = false,
+
+    NotifyEntity = false,
+    NotifyList = { Rush = true, Ambush = true, Figure = true },
     AutoOpenDoor = false, AutoCollectBook = false,
     AutoCollectCoins = false, AutoCollectKey = false, AutoCollectItems = false,
     AutoCollectFuse = false, AutoCollectLever = false, AutoLootChest = "None",
@@ -65,7 +71,6 @@ task.spawn(function()
     end
 end)
 
--- Fix lỗi Line 68: Bọc pcall cho BindToClose
 pcall(function()
     game:BindToClose(function()
         if Cache.States.AutoSave and isDirty then
@@ -102,7 +107,7 @@ local Window = RedzLib:MakeWindow({
     Theme = "Dark"
 })
 
-local VisualTab = Window:MakeTab({ Name = "Visual", Icon = "eye" })
+local MainTab = Window:MakeTab({ Name = "Main", Icon = "eye" })
 local MiscTab = Window:MakeTab({ Name = "Misc", Icon = "component" })
 local ConfigTab = Window:MakeTab({ Name = "Config", Icon = "file-text" })
 
@@ -251,9 +256,21 @@ local function CreateHighlight(adornee, color, parent)
     return highlight
 end
 
-local function CreateLabel(instance, text, color)
+local function CreateLabel(instance, text, color, anchorPart)
     if not instance or Cache.Items[instance] then return end
-    local targetPart = instance:IsA("Model") and (instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart")) or instance
+    local targetPart
+    if anchorPart and anchorPart:IsA("BasePart") and anchorPart.Parent then
+        targetPart = anchorPart
+    elseif instance:IsA("BasePart") then
+        targetPart = instance
+    elseif instance:IsA("Model") then
+
+        targetPart = instance:FindFirstChild("HumanoidRootPart")
+            or instance.PrimaryPart
+            or instance:FindFirstChildWhichIsA("BasePart")
+    else
+        targetPart = GetAnchorPart(instance)
+    end
     if not targetPart then return end
 
     local hls = {}
@@ -348,6 +365,67 @@ local function ProcessItem(obj, roomNum)
     end)
 end
 
+local DOOR_COLOR = Color3.fromRGB(160, 32, 240)
+
+local function FollowPath(root, chain)
+    local cur = root
+    for _, name in ipairs(chain) do
+        if not cur then return nil end
+        local ok, child = pcall(function() return cur:FindFirstChild(name) end)
+        if not ok then return nil end
+        cur = child
+    end
+    return cur
+end
+
+local function ResolveDoorTarget(room)
+    if not room or not room.Parent then return nil, nil end
+
+    local doorModel = room:FindFirstChild("Door")
+
+    local part = FollowPath(room, {"Door", "Door"})
+    if part and part:IsA("BasePart") then
+        return part, (doorModel and doorModel:IsA("Model")) and doorModel or part.Parent
+    end
+
+    local frame = FollowPath(room, {"Parts", "Start_DoorFrame"})
+    if not frame then frame = FollowPath(room, {"Door", "Parts", "Start_DoorFrame"}) end
+    if frame and frame:IsA("BasePart") then
+        return frame, (doorModel and doorModel:IsA("Model")) and doorModel or frame.Parent
+    end
+
+    if doorModel then
+        if doorModel:IsA("BasePart") then return doorModel, doorModel end
+        local any = doorModel.PrimaryPart or doorModel:FindFirstChildWhichIsA("BasePart")
+        if any then return any, doorModel end
+    end
+    return nil, nil
+end
+
+local function DoorText(doorModel, roomName)
+    local locked = false
+    if doorModel and doorModel:IsA("Model") then
+        locked = IsDoorLocked(doorModel)
+    end
+    return locked and ("Door " .. roomName .. " | Locked") or ("Door " .. roomName)
+end
+
+local function ESPDoor(room, force)
+    if not room or not room.Parent then return end
+    local part, model = ResolveDoorTarget(room)
+    if not part then return end
+    local key = model or part
+    local desired = DoorText(model, room.Name)
+    local d = Cache.Items[key]
+
+    if not d then
+        CreateLabel(key, desired, DOOR_COLOR, part)
+    elseif d.Text ~= desired or d.Part ~= part then
+        RemoveESP(key)
+        CreateLabel(key, desired, DOOR_COLOR, part)
+    end
+end
+
 local function CheckRoom(room)
     local roomNum = room.Name
 
@@ -360,13 +438,18 @@ local function CheckRoom(room)
         ProcessItem(obj, roomNum)
     end)
 
-    local door = room:WaitForChild("Door", 3)
-    if door and Cache.States.Door then
-        if IsDoorLocked(door) then
-            CreateLabel(door, "Door " .. roomNum .. " | Locked", Color3.fromRGB(160, 32, 240))
-        else
-            CreateLabel(door, "Door " .. roomNum, Color3.fromRGB(160, 32, 240))
-        end
+    if Cache.States.Door then
+        task.spawn(function()
+            for _ = 1, 12 do
+                if not room.Parent or not Cache.States.Door then return end
+                local part, model = ResolveDoorTarget(room)
+                if part then
+                    ESPDoor(room)
+                    if Cache.Items[model or part] then return end
+                end
+                task.wait(0.25)
+            end
+        end)
     end
 end
 
@@ -391,17 +474,206 @@ task.spawn(function()
     while task.wait(0.5) do
         if Cache.States.Door and CurrentRooms then
             for _, room in ipairs(CurrentRooms:GetChildren()) do
-                local door = room:FindFirstChild("Door")
-                if door and door:IsA("Model") then
-                    local desired = IsDoorLocked(door) and ("Door " .. room.Name .. " | Locked") or ("Door " .. room.Name)
-                    local d = Cache.Items[door]
-                    if d and d.Text ~= desired then
-                        RemoveESP(door)
-                        CreateLabel(door, desired, Color3.fromRGB(160, 32, 240))
-                    elseif not d then
-                        CreateLabel(door, desired, Color3.fromRGB(160, 32, 240))
+                pcall(ESPDoor, room)
+            end
+        end
+    end
+end)
+
+local function GetNotifyGui()
+    local gui = CoreGui:FindFirstChild("NexusNotifyGui")
+    if gui and gui:FindFirstChild("List") then return gui end
+    if gui then gui:Destroy() end
+
+    gui = Instance.new("ScreenGui")
+    gui.Name = "NexusNotifyGui"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 9999
+    gui.Parent = CoreGui
+
+    local list = Instance.new("Frame")
+    list.Name = "List"
+    list.BackgroundTransparency = 1
+    list.AnchorPoint = Vector2.new(1, 1)
+    list.Position = UDim2.new(1, -20, 1, -20)
+    list.Size = UDim2.new(0, 320, 1, -40)
+    list.Parent = gui
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.FillDirection = Enum.FillDirection.Vertical
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = list
+
+    return gui
+end
+
+local NotifyOrder = 0
+local function ShowNotification(title, message, color)
+    local gui = GetNotifyGui()
+    local list = gui:FindFirstChild("List")
+    if not list then return end
+
+    NotifyOrder = NotifyOrder + 1
+    local accent = color or Color3.fromRGB(255, 255, 255)
+
+    local card = Instance.new("Frame")
+    card.Name = "Notification"
+    card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+    card.BackgroundTransparency = 0.1
+    card.BorderSizePixel = 0
+    card.Size = UDim2.new(1, 0, 0, 62)
+    card.Position = UDim2.new(1, 60, 0, 0)
+    card.LayoutOrder = NotifyOrder
+    card.ClipsDescendants = true
+    card.Parent = list
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = card
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = accent
+    stroke.Thickness = 1
+    stroke.Transparency = 0.35
+    stroke.Parent = card
+
+    local bar = Instance.new("Frame")
+    bar.BackgroundColor3 = accent
+    bar.BorderSizePixel = 0
+    bar.Size = UDim2.new(0, 4, 1, 0)
+    bar.Parent = card
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.new(0, 16, 0, 8)
+    titleLabel.Size = UDim2.new(1, -28, 0, 18)
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = 14
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextColor3 = accent
+    titleLabel.Text = title
+    titleLabel.Parent = card
+
+    local msgLabel = Instance.new("TextLabel")
+    msgLabel.BackgroundTransparency = 1
+    msgLabel.Position = UDim2.new(0, 16, 0, 28)
+    msgLabel.Size = UDim2.new(1, -28, 0, 26)
+    msgLabel.Font = Enum.Font.GothamMedium
+    msgLabel.TextSize = 16
+    msgLabel.TextWrapped = true
+    msgLabel.TextXAlignment = Enum.TextXAlignment.Left
+    msgLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    msgLabel.Text = message
+    msgLabel.Parent = card
+
+    card.Position = UDim2.new(1, 60, 0, 0)
+    task.spawn(function()
+        pcall(function()
+            TweenService:Create(card, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(0, 0, 0, 0)}):Play()
+        end)
+    end)
+
+    task.delay(5, function()
+        pcall(function()
+            TweenService:Create(card, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position = UDim2.new(1, 60, 0, 0)}):Play()
+        end)
+        task.wait(0.3)
+        if card and card.Parent then card:Destroy() end
+    end)
+end
+
+local EntityDefs = {
+    Rush = {
+        Display = "Rush",
+        Message = "Rush Is Comming !",
+        Color = Color3.fromRGB(255, 55, 55),
+        State = "RushESP"
+    },
+    Ambush = {
+        Display = "Ambush",
+        Message = "Ambush Is Comming !",
+        Color = Color3.fromRGB(255, 140, 0),
+        State = "AmbushESP"
+    },
+    Figure = {
+        Display = "Figure",
+        Message = "Figure Is Comming !",
+        Color = Color3.fromRGB(255, 0, 90),
+        State = "FigureESP"
+    }
+}
+
+local function GetEntityInstances(name)
+    local list = {}
+    if name == "Figure" then
+        if CurrentRooms then
+            for _, room in ipairs(CurrentRooms:GetChildren()) do
+                local setup = room:FindFirstChild("FigureSetup")
+                if setup then
+                    local rig = setup:FindFirstChild("FigureRig") or setup:FindFirstChildWhichIsA("Model", true)
+                    if rig then table.insert(list, rig) end
+                else
+                    local rig = room:FindFirstChild("FigureRig")
+                    if rig then table.insert(list, rig) end
+                end
+            end
+        end
+        if #list == 0 then
+            for _, room in ipairs(workspace:GetChildren()) do
+                if room.Name == "FigureRig" or room.Name == "FigureSetup" then
+                    table.insert(list, room)
+                end
+            end
+        end
+    else
+        local target = (name == "Rush") and "RushMoving" or "AmbushMoving"
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj.Name == target then table.insert(list, obj) end
+        end
+        if CurrentRooms then
+            for _, obj in ipairs(CurrentRooms:GetChildren()) do
+                if obj.Name == target then table.insert(list, obj) end
+            end
+        end
+    end
+    return list
+end
+
+local EntityPresence = { Rush = false, Ambush = false, Figure = false }
+
+local function IsNotifyEnabled(name)
+    if not Cache.States.NotifyEntity then return false end
+    local list = Cache.States.NotifyList
+    if type(list) ~= "table" then return false end
+    return list[name] == true
+end
+
+task.spawn(function()
+    while task.wait(0.2) do
+        for name, def in pairs(EntityDefs) do
+            local instances = GetEntityInstances(name)
+            local present = #instances > 0
+
+            if present and Cache.States[def.State] then
+                for _, inst in ipairs(instances) do
+                    if not Cache.Items[inst] then
+                        pcall(CreateLabel, inst, def.Display, def.Color)
                     end
                 end
+            end
+
+            if present and not EntityPresence[name] then
+                EntityPresence[name] = true
+                if IsNotifyEnabled(name) then
+                    ShowNotification("Nexus Notification ⭐", def.Message, def.Color)
+                end
+            elseif not present and EntityPresence[name] then
+                EntityPresence[name] = false
             end
         end
     end
@@ -412,18 +684,64 @@ local function updateCameraState()
     Camera.CameraType = (camDist <= 0) and Enum.CameraType.Custom or Enum.CameraType.Scriptable
 end
 
-VisualTab:AddToggle({ Name = "ESP Key", Default = Cache.States.Key, Callback = function(v) Cache.States.Key = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Door", Default = Cache.States.Door, Callback = function(v) Cache.States.Door = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Book", Default = Cache.States.Book, Callback = function(v) Cache.States.Book = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Coins", Default = Cache.States.Coins, Callback = function(v) Cache.States.Coins = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Lever", Default = Cache.States.Lever, Callback = function(v) Cache.States.Lever = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Fuse", Default = Cache.States.Fuse, Callback = function(v) Cache.States.Fuse = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Chest Box", Default = Cache.States.ChestBox, Callback = function(v) Cache.States.ChestBox = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Items", Default = Cache.States.Items, Callback = function(v) Cache.States.Items = v; isDirty = true; RefreshAll() end })
-VisualTab:AddToggle({ Name = "ESP Figure", Default = Cache.States.FigureESP, Callback = function(v) Cache.States.FigureESP = v; isDirty = true end })
-VisualTab:AddToggle({ Name = "ESP Player", Default = Cache.States.PlayerESP, Callback = function(v) Cache.States.PlayerESP = v; isDirty = true end })
+MainTab:AddSection({ Name = "ESP Object" })
+MainTab:AddToggle({ Name = "ESP Key", Default = Cache.States.Key, Callback = function(v) Cache.States.Key = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Door", Default = Cache.States.Door, Callback = function(v) Cache.States.Door = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Book", Default = Cache.States.Book, Callback = function(v) Cache.States.Book = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Coins", Default = Cache.States.Coins, Callback = function(v) Cache.States.Coins = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Lever", Default = Cache.States.Lever, Callback = function(v) Cache.States.Lever = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Fuse", Default = Cache.States.Fuse, Callback = function(v) Cache.States.Fuse = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Chest Box", Default = Cache.States.ChestBox, Callback = function(v) Cache.States.ChestBox = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Items", Default = Cache.States.Items, Callback = function(v) Cache.States.Items = v; isDirty = true; RefreshAll() end })
 
-VisualTab:AddToggle({ Name = "Full Bright", Default = Cache.States.FullBright, Callback = function(v)
+MainTab:AddSection({ Name = "ESP Entity" })
+MainTab:AddToggle({ Name = "ESP Rush", Desc = "workspace.RushMoving", Default = Cache.States.RushESP, Callback = function(v) Cache.States.RushESP = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Ambush", Desc = "workspace.AmbushMoving", Default = Cache.States.AmbushESP, Callback = function(v) Cache.States.AmbushESP = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Figure", Default = Cache.States.FigureESP, Callback = function(v) Cache.States.FigureESP = v; isDirty = true; RefreshAll() end })
+MainTab:AddToggle({ Name = "ESP Player", Default = Cache.States.PlayerESP, Callback = function(v) Cache.States.PlayerESP = v; isDirty = true; RefreshAll() end })
+
+MainTab:AddSection({ Name = "Notification Entity" })
+MainTab:AddToggle({ Name = "Notify Entity", Default = Cache.States.NotifyEntity, Callback = function(v)
+    Cache.States.NotifyEntity = v
+    isDirty = true
+end })
+
+local NotifyOptionNames = { "Rush", "Ambush", "Figure" }
+
+local function GetNotifyDefaults()
+    local t = {}
+    local saved = Cache.States.NotifyList
+    for _, n in ipairs(NotifyOptionNames) do
+        if type(saved) == "table" and saved[n] then
+            table.insert(t, n)
+        end
+    end
+    return t
+end
+
+MainTab:AddDropdown({
+    Name = "Select Entity",
+    Desc = "Rush / Ambush / Figure",
+    Options = { "Rush", "Ambush", "Figure" },
+    Default = GetNotifyDefaults(),
+    MultiSelect = true,
+    Callback = function(selected)
+        local list = { Rush = false, Ambush = false, Figure = false }
+        if type(selected) == "table" then
+            for name, value in pairs(selected) do
+                if type(name) == "string" and list[name] ~= nil and value then
+                    list[name] = true
+                elseif type(name) == "number" and list[value] ~= nil then
+                    list[value] = true
+                end
+            end
+        end
+        Cache.States.NotifyList = list
+        isDirty = true
+    end
+})
+
+MainTab:AddToggle({ Name = "Full Bright", Default = Cache.States.FullBright, Callback = function(v)
     Cache.States.FullBright = v
     isDirty = true
     if v then
@@ -649,15 +967,7 @@ end)
 
 task.spawn(function()
     while task.wait(0.5) do
-        if Cache.States.FigureESP and CurrentRooms then
-            for _, r in ipairs({"50", "100"}) do
-                local room = CurrentRooms:FindFirstChild(r)
-                local fig = room and room:FindFirstChild("FigureSetup") and room.FigureSetup:FindFirstChild("FigureRig")
-                if fig and not Cache.Items[fig] then
-                    CreateLabel(fig, "Figure", Color3.fromRGB(255, 0, 0))
-                end
-            end
-        end
+
         if Cache.States.PlayerESP then
             for _, plr in ipairs(Players:GetPlayers()) do
                 if plr ~= LocalPlayer and plr.Character and not Cache.Items[plr.Character] then
@@ -728,7 +1038,7 @@ end
 local function FindInteractPrompt(rootPos, maxDist)
     local bestPrompt, bestDist = nil, math.huge
     if not CurrentRooms then return nil end
-    
+
     for _, obj in ipairs(CurrentRooms:GetDescendants()) do
         if obj:IsA("ProximityPrompt") and obj.ActionText == "Interact" then
             local parent = obj.Parent
@@ -967,9 +1277,9 @@ task.spawn(function()
                 for _, obj in ipairs(descendants) do
                     if (obj.Name == "ChestBox" and (Cache.States.AutoLootChest == "Chest Box" or Cache.States.AutoLootChest == "All")) or
                        (obj.Name == "ChestBoxLocked" and (Cache.States.AutoLootChest == "Chest Box Locked" or Cache.States.AutoLootChest == "All")) then
-                        
+
                         TryFireCollectPrompt(obj, rootPos)
-                        
+
                         if obj.Name == "ChestBoxLocked" then
                             local anchor = GetAnchorPart(obj)
                             if anchor and (rootPos - anchor.Position).Magnitude <= 15 then
