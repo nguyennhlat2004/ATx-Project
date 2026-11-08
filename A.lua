@@ -816,9 +816,27 @@ end
 
 local entitiesCache = {folder = nil, at = -100}
 
+local function getCurrentContext()
+    local best, bestN, hasE = nil, -1, false
+    pcall(function()
+        local ctx = workspace:FindFirstChild("Contexts")
+        if not ctx then
+            return
+        end
+        for _, c in ipairs(ctx:GetChildren()) do
+            local n = tonumber(tostring(c.Name):match("(%d+)$")) or 0
+            local e = c:FindFirstChild("Entities") ~= nil
+            if (e and not hasE) or (e == hasE and n > bestN) then
+                best, bestN, hasE = c, n, e
+            end
+        end
+    end)
+    return best
+end
+
 local function getEntitiesFolder()
     local c = entitiesCache.folder
-    if c and os.clock() - entitiesCache.at < 3 then
+    if c and os.clock() - entitiesCache.at < 1 then
         local okP, par = pcall(function()
             return c.Parent
         end)
@@ -826,41 +844,34 @@ local function getEntitiesFolder()
             return c
         end
     end
-    local best, bestN = nil, -1
-    local function consider(e)
-        if not e then
-            return
-        end
-        local n = 0
-        for _, k in ipairs(e:GetChildren()) do
-            local nm = tostring(k.Name)
-            if nm:sub(1, 5) == "unit_" or nm:sub(1, 6) == "enemy_" then
-                n = n + 1
-            end
-        end
-        if n > bestN then
-            best, bestN = e, n
-        end
+    local best = nil
+    local cur = getCurrentContext()
+    if cur then
+        pcall(function()
+            best = cur:FindFirstChild("Entities")
+        end)
     end
-    pcall(function()
-        local ctx = workspace:FindFirstChild("Contexts")
-        if ctx then
-            for _, c in ipairs(ctx:GetChildren()) do
-                consider(c:FindFirstChild("Entities"))
+    if not best then
+        local bestN = -1
+        pcall(function()
+            for _, ch in ipairs(workspace:GetChildren()) do
+                if ch.Name == "Map" then
+                    local e = ch:FindFirstChild("Entities")
+                    if e then
+                        local n = #e:GetChildren()
+                        if n > bestN then
+                            best, bestN = e, n
+                        end
+                    end
+                end
             end
-        end
-        for _, ch in ipairs(workspace:GetChildren()) do
-            if ch.Name == "Map" then
-                consider(ch:FindFirstChild("Entities"))
+            if not best then
+                best = workspace:FindFirstChild("Entities")
             end
-        end
-        consider(workspace:FindFirstChild("Entities"))
-        if not best then
-            consider(workspace:FindFirstChild("Entities", true))
-        end
-    end)
+        end)
+    end
     entitiesCache.folder = best
-    entitiesCache.at = bestN > 0 and os.clock() or -100
+    entitiesCache.at = os.clock()
     return best
 end
 
@@ -1122,7 +1133,14 @@ local function waitForGameStart(difficulty)
         if gameEndShown() then
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
-                pcall(function() restartGame:InvokeServer() end)
+                pcall(function()
+                    local cur = getCurrentContext()
+                    if cur then
+                        restartGame:InvokeServer(cur, false)
+                    else
+                        restartGame:InvokeServer()
+                    end
+                end)
                 waitUntilHidden("GameGui.Screen.Middle.GameEnd")
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
@@ -2229,9 +2247,6 @@ local EE_NIGHT = {
                     unit_stringshade = 3,
                     unit_black_hole = 3,
                     unit_bronze_lucky_chomp = 5,
-                },
-                SellAtWave = {
-                    {Wave = 35, Unit = "unit_stringshade", Count = 2},
                 },
                 Groups = {
                     {
@@ -3392,7 +3407,13 @@ local function eeWaitForGameStart(difficulty)
             farmStatusText = "Game End | Restart"
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
-                eeInvoke(restartGame, 5)
+                local cur = getCurrentContext()
+                if cur then
+                    eeInvoke(restartGame, 5, cur, false)
+                else
+                    eeInvoke(restartGame, 5)
+                end
+                entitiesCache.at = -100
                 local w = 0
                 while autoFarmEnabled and isVisible("GameGui.Screen.Middle.GameEnd") and w < 10 do
                     task.wait(0.05)
@@ -3433,6 +3454,7 @@ function runSlotFarm(profile, freshStart)
 
     farmStatusText = "Waiting Game Start"
     local restarted = eeWaitForGameStart(difficulty)
+    entitiesCache.at = -100
     if not autoFarmEnabled then
         return false
     end
@@ -3598,78 +3620,6 @@ function runSlotFarm(profile, freshStart)
         end)
     end
 
-    if type(profile.SellAtWave) == "table" and #profile.SellAtWave > 0 then
-        task.spawn(function()
-            local sellRemote = makeRemote("SellUnit")
-            local soldN = {}
-            local function aliveModel(m)
-                local okP, par = pcall(function()
-                    return m.Parent
-                end)
-                return okP and par ~= nil
-            end
-            local function pickTarget(unitName)
-                for _, g in ipairs(groups1) do
-                    for _, sl in ipairs(g.slots) do
-                        if sl.name == unitName and not sl.sold and sl.model and aliveModel(sl.model) then
-                            return sl.model, sl
-                        end
-                    end
-                end
-                for _, m in ipairs(eeUnits(unitName)) do
-                    local used = false
-                    for _, g in ipairs(groups1) do
-                        for _, sl in ipairs(g.slots) do
-                            if sl.model == m and sl.sold then
-                                used = true
-                            end
-                        end
-                    end
-                    if not used then
-                        return m, nil
-                    end
-                end
-                return nil, nil
-            end
-            while active() do
-                local w = readWave()
-                for i, rule in ipairs(profile.SellAtWave) do
-                    local unitName = tostring(rule.Unit or "")
-                    local want = tonumber(rule.Count) or 1
-                    soldN[i] = soldN[i] or 0
-                    if unitName ~= "" and soldN[i] < want and w >= (tonumber(rule.Wave) or math.huge) then
-                        local m, sl = pickTarget(unitName)
-                        if not m then
-                            soldN[i] = want
-                        else
-                            local id = nil
-                            pcall(function()
-                                id = m:GetAttribute("ID")
-                            end)
-                            if id ~= nil then
-                                if sl then
-                                    sl.sold = true
-                                end
-                                farmStatusText = string.format("Wave %d | Sell %s %d/%d", w, eeUnitLabel(unitName), soldN[i] + 1, want)
-                                eeInvoke(sellRemote, 5, id)
-                                local t0 = clockNow()
-                                while active() and aliveModel(m) and clockNow() - t0 < 2 do
-                                    task.wait(0.05)
-                                end
-                                if not aliveModel(m) then
-                                    soldN[i] = soldN[i] + 1
-                                elseif sl then
-                                    sl.sold = nil
-                                end
-                            end
-                        end
-                    end
-                end
-                task.wait(0.3)
-            end
-        end)
-    end
-
     local function runStage2()
         stage = 2
         upgradeAllowed = false
@@ -3693,7 +3643,7 @@ function runSlotFarm(profile, freshStart)
         end
         for _, g in ipairs(groups1) do
             for _, s in ipairs(g.slots) do
-                if s.done and s.model and not s.sold then
+                if s.done and s.model then
                     local okP, par = pcall(function()
                         return s.model.Parent
                     end)
