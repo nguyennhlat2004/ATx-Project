@@ -21,7 +21,7 @@ local DefaultStates = {
     RushESP = false, AmbushESP = false,
 
     NotifyEntity = false,
-    NotifyList = { Rush = true, Ambush = true, Figure = true },
+    NotifyTargets = { Rush = true, Ambush = true, Figure = true },
     AutoOpenDoor = false, AutoCollectBook = false,
     AutoCollectCoins = false, AutoCollectKey = false, AutoCollectItems = false,
     AutoCollectFuse = false, AutoCollectLever = false, AutoLootChest = "None",
@@ -608,38 +608,28 @@ local EntityDefs = {
     }
 }
 
+local EntityPaths = {
+    Rush = { "RushMoving", "RushNew", "RushEntity" },
+    Ambush = { "AmbushMoving", "AmbushNew", "AmbushEntity" },
+    Figure = { "FigureRig", "FigureSetup" }
+}
+
+local function FindEntityRoot(name)
+    for _, candidate in ipairs(EntityPaths[name] or {}) do
+        local found = workspace:FindFirstChild(candidate, true)
+        if found then return found, candidate end
+    end
+    return nil, nil
+end
+
 local function GetEntityInstances(name)
     local list = {}
-    if name == "Figure" then
-        if CurrentRooms then
-            for _, room in ipairs(CurrentRooms:GetChildren()) do
-                local setup = room:FindFirstChild("FigureSetup")
-                if setup then
-                    local rig = setup:FindFirstChild("FigureRig") or setup:FindFirstChildWhichIsA("Model", true)
-                    if rig then table.insert(list, rig) end
-                else
-                    local rig = room:FindFirstChild("FigureRig")
-                    if rig then table.insert(list, rig) end
-                end
-            end
+    local found, candidate = FindEntityRoot(name)
+    if found then
+        if candidate == "FigureSetup" then
+            found = found:FindFirstChild("FigureRig") or found:FindFirstChildWhichIsA("Model", true) or found
         end
-        if #list == 0 then
-            for _, room in ipairs(workspace:GetChildren()) do
-                if room.Name == "FigureRig" or room.Name == "FigureSetup" then
-                    table.insert(list, room)
-                end
-            end
-        end
-    else
-        local target = (name == "Rush") and "RushMoving" or "AmbushMoving"
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj.Name == target then table.insert(list, obj) end
-        end
-        if CurrentRooms then
-            for _, obj in ipairs(CurrentRooms:GetChildren()) do
-                if obj.Name == target then table.insert(list, obj) end
-            end
-        end
+        table.insert(list, found)
     end
     return list
 end
@@ -648,9 +638,9 @@ local EntityPresence = { Rush = false, Ambush = false, Figure = false }
 
 local function IsNotifyEnabled(name)
     if not Cache.States.NotifyEntity then return false end
-    local list = Cache.States.NotifyList
-    if type(list) ~= "table" then return false end
-    return list[name] == true
+    local targets = Cache.States.NotifyTargets
+    if type(targets) ~= "table" then return false end
+    return targets[name] == true
 end
 
 task.spawn(function()
@@ -704,40 +694,73 @@ MainTab:AddSection({ Name = "Notification Entity" })
 MainTab:AddToggle({ Name = "Notify Entity", Default = Cache.States.NotifyEntity, Callback = function(v)
     Cache.States.NotifyEntity = v
     isDirty = true
+    if v then
+        for name, def in pairs(EntityDefs) do
+            if IsNotifyEnabled(name) and #GetEntityInstances(name) > 0 then
+                ShowNotification("Nexus Notification ⭐", def.Message, def.Color)
+            end
+        end
+    end
 end })
 
-local NotifyOptionNames = { "Rush", "Ambush", "Figure" }
+local EntityOptionSet = { Rush = true, Ambush = true, Figure = true }
 
-local function GetNotifyDefaults()
-    local t = {}
-    local saved = Cache.States.NotifyList
-    for _, n in ipairs(NotifyOptionNames) do
-        if type(saved) == "table" and saved[n] then
-            table.insert(t, n)
+local function BuildTargets(source)
+    local t = { Rush = false, Ambush = false, Figure = false }
+    if type(source) ~= "table" then return t end
+    for name, value in pairs(source) do
+        if type(name) == "string" and t[name] ~= nil then
+            if value then t[name] = true end
+        elseif type(name) == "number" and type(value) == "string" and t[value] ~= nil then
+            t[value] = true
         end
     end
     return t
 end
 
-MainTab:AddDropdown({
+local function GetTargetDefaults()
+    local saved = Cache.States.NotifyTargets
+    local out = {}
+    local any = false
+    if type(saved) == "table" then
+        for name, value in pairs(EntityOptionSet) do
+            if saved[name] then out[name] = true; any = true end
+        end
+    end
+    if not any then
+        for name in pairs(EntityOptionSet) do out[name] = true end
+    end
+    return out
+end
+
+local notifyDropdownInit = true
+
+local NotifyDropdown = MainTab:AddDropdown({
     Name = "Select Entity",
     Desc = "Rush / Ambush / Figure",
-    Options = { "Rush", "Ambush", "Figure" },
-    Default = GetNotifyDefaults(),
+    Options = EntityOptionSet,
+    Default = GetTargetDefaults(),
     MultiSelect = true,
     Callback = function(selected)
-        local list = { Rush = false, Ambush = false, Figure = false }
-        if type(selected) == "table" then
-            for name, value in pairs(selected) do
-                if type(name) == "string" and list[name] ~= nil and value then
-                    list[name] = true
-                elseif type(name) == "number" and list[value] ~= nil then
-                    list[value] = true
-                end
+        if notifyDropdownInit then
+            notifyDropdownInit = false
+            return
+        end
+        Cache.States.NotifyTargets = BuildTargets(selected)
+        isDirty = true
+    end
+})
+
+MainTab:AddButton({
+    Name = "Test Notify",
+    Callback = function()
+        for name, def in pairs(EntityDefs) do
+            if IsNotifyEnabled(name) then
+                ShowNotification("Nexus Notification ⭐", def.Message, def.Color)
+                return
             end
         end
-        Cache.States.NotifyList = list
-        isDirty = true
+        ShowNotification("Nexus Notification ⭐", "Rush Is Comming !", Color3.fromRGB(255, 55, 55))
     end
 })
 
