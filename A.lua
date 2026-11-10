@@ -3589,6 +3589,102 @@ local function setToggleSilent(toggle, value)
 end
 
 local function startFarmFor(name)
+    local function notify(text)
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "Nexus Stella",
+                Text = text,
+                Duration = 10,
+            })
+        end)
+    end
+    local function requiredUnits(prof)
+        local list, seen = {}, {}
+        local function addUnits(units)
+            for _, u in ipairs(type(units) == "table" and units or {}) do
+                local n = type(u) == "table" and tostring(u.name or u.Name or u[1] or "") or tostring(u)
+                if n ~= "" and not seen[string.lower(n)] then
+                    seen[string.lower(n)] = true
+                    list[#list + 1] = n
+                end
+            end
+        end
+        local function addEvents(evs)
+            for _, ev in ipairs(type(evs) == "table" and evs or {}) do
+                addUnits(ev.Units or ev.units)
+                addUnits(ev.FillRemainWith or ev.fillRemainWith)
+            end
+        end
+        addEvents(prof.Events)
+        if type(prof.Stage2) == "table" then
+            addEvents(prof.Stage2.Events)
+        end
+        return list
+    end
+    local function backpackNames()
+        local names = {}
+        pcall(function()
+            local holders = {player:FindFirstChildOfClass("Backpack"), player.Character}
+            for _, h in ipairs(holders) do
+                if h then
+                    for _, t in ipairs(h:GetChildren()) do
+                        if t:IsA("Tool") then
+                            names[#names + 1] = tostring(t.Name)
+                        end
+                    end
+                end
+            end
+        end)
+        return names
+    end
+    local prevFarm = currentFarm
+    currentFarm = name
+    local checkData = loadActiveProfile()
+    currentFarm = prevFarm
+    if checkData then
+        local have = backpackNames()
+        local t0 = clockNow()
+        while #have == 0 and clockNow() - t0 < 3 do
+            task.wait(0.25)
+            have = backpackNames()
+        end
+        local missing = {}
+        for _, need in ipairs(requiredUnits(checkData)) do
+            local found = false
+            for _, h in ipairs(have) do
+                if nameMatchesUnit(h, need) then
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                missing[#missing + 1] = eeUnitLabel(need)
+            end
+        end
+        if #missing > 0 then
+            local msg = "Thiếu unit trong Backpack: " .. table.concat(missing, ", ") .. ". Không chạy farm."
+            if #have == 0 then
+                msg = "Không thấy unit nào trong Backpack. Không chạy farm."
+            end
+            notify(msg)
+            farmStatusText = "Missing Units: " .. table.concat(missing, ", ")
+            local toggles = {
+                RadioactiveRampage = radioactiveRampageToggle,
+                EnchantedEncounter = enchantedEncounterToggle,
+                GardenGrind = gardenGrindToggle,
+                EnchantedEncounterNight = EE_NIGHT.toggle,
+            }
+            local tg = toggles[name]
+            task.spawn(function()
+                pcall(function()
+                    if tg then
+                        tg:Set(false, true)
+                    end
+                end)
+            end)
+            return
+        end
+    end
     if autoFarmEnabled and currentFarm ~= name then
         local other = currentFarm
         currentFarm = name
