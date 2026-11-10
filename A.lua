@@ -3641,7 +3641,7 @@ local function startFarmFor(name)
     currentFarm = name
     local checkData = loadActiveProfile()
     currentFarm = prevFarm
-    if checkData then
+    if checkData and checkData.Night ~= true then
         local have = backpackNames()
         local t0 = clockNow()
         while #have == 0 and clockNow() - t0 < 3 do
