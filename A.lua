@@ -1134,7 +1134,15 @@ local function waitForGameStart(difficulty)
         if gameEndShown() then
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
-                pcall(function() restartGame:InvokeServer() end)
+                pcall(function()
+                    local cur = entitiesCache.night and getCurrentContext() or nil
+                    if cur then
+                        restartGame:InvokeServer(cur, false)
+                    else
+                        restartGame:InvokeServer()
+                    end
+                end)
+                entitiesCache.at = -100
                 waitUntilHidden("GameGui.Screen.Middle.GameEnd")
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
@@ -1921,10 +1929,14 @@ local RADIOACTIVE_RAMPAGE_L4_PROFILE_FALLBACK = {
 
 local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
     Name = "Enchanted Encounter ( Level 5 )",
-    Engine = "slots",
     Difficulty = "dif_impossible",
+    MaxPlace = 20,
+    UfoReserve = 0,
     DefaultAngle = {-math.pi, 0, -math.pi},
     DefaultRotation = 180,
+    Abilities = {
+        {Unit = "unit_lava_shroom", Interval = 2},
+    },
     Price = {
         unit_razor_rainbow = 200,
         unit_life_flower = 1300,
@@ -1932,17 +1944,17 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
         unit_bloodvine = 2000,
         unit_lava_shroom = 3250,
     },
-    Limit = {
-        unit_bloodvine = 5,
-        unit_lava_shroom = 3,
-    },
-    Abilities = {
-        {Unit = "unit_lava_shroom", Interval = 2},
-    },
-    Groups = {
+    Events = {
         {
-            Name = "Rainbow",
-            FromWave = 0,
+            Type = "StartPlace",
+            Name = "Place1_Rainbow",
+            HardCap = 6,
+            MaxCount = 6,
+            SoftFail = false,
+            MaxAttempts = 80,
+            MaxCashWait = 900,
+            Shuffle = true,
+            ReserveSlots = 0,
             Units = {
                 {name = "unit_razor_rainbow", pos = {-339.91, 61.68, -69.11}},
                 {name = "unit_razor_rainbow", pos = {-339.55, 61.68, -72.08}},
@@ -1953,15 +1965,45 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
             },
         },
         {
-            Name = "Ember",
-            FromWave = 9,
+            Type = "StartUpgradeAll",
+            Name = "Upgrade_Main",
+            RequireMinPlaced = 1,
+            UntilGameEnd = true,
+        },
+        {
+            Type = "WaitWave",
+            Wave = 9,
+        },
+        {
+            Type = "StartPlace",
+            Name = "Place2_Ember",
+            HardCap = 7,
+            MaxCount = 1,
+            SoftFail = false,
+            MaxAttempts = 80,
+            MaxCashWait = 900,
+            Shuffle = true,
+            ReserveSlots = 0,
+            PauseUpgrade = true,
             Units = {
                 {name = "unit_life_flower", pos = {-335.72, 61.68, -122.21}},
             },
         },
         {
-            Name = "BlackHole",
-            FromWave = 18,
+            Type = "WaitWave",
+            Wave = 18,
+        },
+        {
+            Type = "StartPlace",
+            Name = "Place3_BlackHole",
+            HardCap = 10,
+            MaxCount = 3,
+            SoftFail = false,
+            MaxAttempts = 80,
+            MaxCashWait = 900,
+            Shuffle = true,
+            ReserveSlots = 0,
+            PauseUpgrade = true,
             Units = {
                 {name = "unit_black_hole", pos = {-338.76, 61.68, -124.50}},
                 {name = "unit_black_hole", pos = {-335.42, 61.68, -125.40}},
@@ -1969,8 +2011,20 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
             },
         },
         {
-            Name = "Bloodvine",
-            FromWave = 27,
+            Type = "WaitWave",
+            Wave = 27,
+        },
+        {
+            Type = "StartPlace",
+            Name = "Place4_Bloodvine",
+            HardCap = 15,
+            MaxCount = 5,
+            SoftFail = false,
+            MaxAttempts = 80,
+            MaxCashWait = 900,
+            Shuffle = true,
+            ReserveSlots = 0,
+            PauseUpgrade = true,
             Units = {
                 {name = "unit_bloodvine", pos = {-333.76, 61.68, -129.80}},
                 {name = "unit_bloodvine", pos = {-339.06, 61.68, -130.02}},
@@ -1980,8 +2034,20 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
             },
         },
         {
-            Name = "Ashroom",
-            FromWave = 30,
+            Type = "WaitWave",
+            Wave = 30,
+        },
+        {
+            Type = "StartPlace",
+            Name = "Place5_Ashroom",
+            HardCap = 18,
+            MaxCount = 3,
+            SoftFail = false,
+            MaxAttempts = 80,
+            MaxCashWait = 900,
+            Shuffle = true,
+            ReserveSlots = 0,
+            PauseUpgrade = true,
             Units = {
                 {name = "unit_lava_shroom", pos = {-340.10, 61.68, -114.17}},
                 {name = "unit_lava_shroom", pos = {-330.93, 61.68, -114.18}},
@@ -1996,10 +2062,17 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
         EnemyMatch = "enemy",
         ConfirmChecks = 2,
         SellAll = true,
-        Groups = {
+        Events = {
             {
-                Name = "Stage2",
-                FromWave = 0,
+                Type = "StartPlace",
+                Name = "Stage2_Units",
+                HardCap = 12,
+                MaxCount = 12,
+                SoftFail = false,
+                MaxAttempts = 80,
+                MaxCashWait = 900,
+                Shuffle = false,
+                ReserveSlots = 0,
                 Units = {
                     {name = "unit_bloodvine", pos = {-340.29, 61.68, -212.21}},
                     {name = "unit_bloodvine", pos = {-339.80, 61.68, -216.59}},
@@ -2014,6 +2087,12 @@ local ENCHANTED_ENCOUNTER_L5_PROFILE_FALLBACK = {
                     {name = "unit_black_hole", pos = {-331.44, 61.68, -232.74}},
                     {name = "unit_black_hole", pos = {-339.77, 61.68, -233.83}},
                 },
+            },
+            {
+                Type = "StartUpgradeAll",
+                Name = "Stage2_Upgrade",
+                RequireMinPlaced = 1,
+                UntilGameEnd = true,
             },
         },
     },
@@ -2030,11 +2109,12 @@ local GARDEN_GRIND = {
             url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/Garden-Grind-Level4.lua",
             fallback = {
                 Name = "Garden Grind ( Level 4 )",
-                Engine = "slots",
                 Difficulty = "dif_insane",
-                StopAutoSkipAtWave = 34,
+                MaxPlace = 20,
+                UfoReserve = 0,
                 DefaultAngle = {-math.pi, 0, -math.pi},
                 DefaultRotation = 180,
+                StopAutoSkipAtWave = 34,
                 Price = {
                     unit_trithorn = 333,
                     unit_life_flower = 1300,
@@ -2042,38 +2122,81 @@ local GARDEN_GRIND = {
                     unit_black_hole = 4500,
                     unit_bloodvine = 2000,
                 },
-                Limit = {
-                    unit_bloodvine = 5,
-                },
-                UpgradeWindows = {
-                    {FromWave = 0, ToWave = 32},
-                },
-                Groups = {
+                Events = {
                     {
-                        Name = "Trithorn",
-                        FromWave = 0,
+                        Type = "StartPlace",
+                        Name = "Place1_Trithorn",
+                        HardCap = 1,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
                         Units = {
                             {name = "unit_trithorn", pos = {-846.17, 61.93, -164.15}},
                         },
                     },
                     {
-                        Name = "Ember",
-                        FromWave = 5,
+                        Type = "StartUpgradeAll",
+                        Name = "Upgrade_Main",
+                        RequireMinPlaced = 1,
+                        StopAtWave = 33,
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 5,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place2_Ember",
+                        HardCap = 2,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_life_flower", pos = {-838.50, 61.93, -165.47}},
                         },
                     },
                     {
-                        Name = "Pushpetal",
-                        FromWave = 18,
+                        Type = "WaitWave",
+                        Wave = 18,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place3_Pushpetal",
+                        HardCap = 4,
+                        MaxCount = 2,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_mint_bloom", pos = {-847.12, 61.93, -145.48}},
                             {name = "unit_mint_bloom", pos = {-856.81, 61.93, -145.15}},
                         },
                     },
                     {
-                        Name = "BlackHole",
-                        FromWave = 24,
+                        Type = "WaitWave",
+                        Wave = 24,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place4_BlackHole",
+                        HardCap = 7,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_black_hole", pos = {-837.76, 61.93, -150.51}},
                             {name = "unit_black_hole", pos = {-830.95, 61.93, -159.20}},
@@ -2081,8 +2204,20 @@ local GARDEN_GRIND = {
                         },
                     },
                     {
-                        Name = "Bloodvine",
-                        FromWave = 27,
+                        Type = "WaitWave",
+                        Wave = 27,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place5_Bloodvine",
+                        HardCap = 12,
+                        MaxCount = 5,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_bloodvine", pos = {-837.98, 61.93, -157.87}},
                             {name = "unit_bloodvine", pos = {-848.03, 61.93, -152.16}},
@@ -2101,7 +2236,7 @@ local function loadGardenGrindProfile(level)
     local entry = GARDEN_GRIND.levels[tostring(level or GARDEN_GRIND.selected)] or GARDEN_GRIND.levels["Level 4"]
     local url = entry.url
     local data = decodeFarmLua(httpGet(url))
-    if not profileMatches(data, "garden") or type(data.Groups) ~= "table" then
+    if not profileMatches(data, "garden") or type(data.Events) ~= "table" then
         data = deepCopy(entry.fallback)
         url = "embedded:GardenGrind"
     end
@@ -2116,7 +2251,7 @@ local function loadEnchantedEncounterProfile(level)
     local entry = ENCHANTED_ENCOUNTER_LEVELS[tostring(level or selectedEnchantedEncounterLevel or "Level 5")] or ENCHANTED_ENCOUNTER_LEVELS["Level 5"]
     local url = entry.url
     local data = decodeFarmLua(httpGet(url))
-    if not profileMatches(data, "enchanted") or type(data.Groups) ~= "table" then
+    if not profileMatches(data, "enchanted") or type(data.Events) ~= "table" then
         data = deepCopy(entry.fallback)
         url = "embedded:EnchantedEncounter"
     end
@@ -2131,13 +2266,16 @@ local RADIOACTIVE_RAMPAGE_LEVELS = {
     ["Level 4"] = {url = FARM_URL_RADIOACTIVE_RAMPAGE_L4, fallback = RADIOACTIVE_RAMPAGE_L4_PROFILE_FALLBACK},
     ["Level 5"] = {
         url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/RadioactiveRampage-Level5.lua",
-        slots = true,
         fallback = {
             Name = "Radioactive Rampage ( Level 5 )",
-            Engine = "slots",
             Difficulty = "dif_impossible",
+            MaxPlace = 20,
+            UfoReserve = 0,
             DefaultAngle = {-math.pi, 0, -math.pi},
             DefaultRotation = 180,
+            AutoSkipOff = {
+                {FromWave = 23, ToWave = 31},
+            },
             Price = {
                 unit_trithorn = 333,
                 unit_life_flower = 1300,
@@ -2145,35 +2283,61 @@ local RADIOACTIVE_RAMPAGE_LEVELS = {
                 unit_stringshade = 2777,
                 unit_bronze_lucky_chomp = 4500,
             },
-            Limit = {
-                unit_bloodvine = 5,
-                unit_stringshade = 3,
-                unit_bronze_lucky_chomp = 5,
-            },
-            UpgradeWindows = {
-                {FromWave = 0, ToWave = 32},
-            },
-            AutoSkipOff = {
-                {FromWave = 23, ToWave = 31},
-            },
-            Groups = {
+            Events = {
                 {
-                    Name = "Trithorn",
-                    FromWave = 0,
+                    Type = "StartPlace",
+                    Name = "Place1_Trithorn",
+                    HardCap = 1,
+                    MaxCount = 1,
+                    SoftFail = false,
+                    MaxAttempts = 80,
+                    MaxCashWait = 900,
+                    Shuffle = true,
+                    ReserveSlots = 0,
                     Units = {
                         {name = "unit_trithorn", pos = {-4.40, 2.00, 323.07}},
                     },
                 },
                 {
-                    Name = "Ember",
-                    FromWave = 4,
+                    Type = "StartUpgradeAll",
+                    Name = "Upgrade_Main",
+                    RequireMinPlaced = 1,
+                    StopAtWave = 33,
+                },
+                {
+                    Type = "WaitWave",
+                    Wave = 4,
+                },
+                {
+                    Type = "StartPlace",
+                    Name = "Place2_Ember",
+                    HardCap = 2,
+                    MaxCount = 1,
+                    SoftFail = false,
+                    MaxAttempts = 80,
+                    MaxCashWait = 900,
+                    Shuffle = true,
+                    ReserveSlots = 0,
+                    PauseUpgrade = true,
                     Units = {
                         {name = "unit_life_flower", pos = {-4.98, 2.00, 294.49}},
                     },
                 },
                 {
-                    Name = "Bloodvine + Stringshade",
-                    FromWave = 16,
+                    Type = "WaitWave",
+                    Wave = 16,
+                },
+                {
+                    Type = "StartPlace",
+                    Name = "Place3_Bloodvine_Stringshade",
+                    HardCap = 10,
+                    MaxCount = 8,
+                    SoftFail = false,
+                    MaxAttempts = 80,
+                    MaxCashWait = 900,
+                    Shuffle = true,
+                    ReserveSlots = 0,
+                    PauseUpgrade = true,
                     Units = {
                         {name = "unit_bloodvine", pos = {-17.08, 2.00, 292.68}},
                         {name = "unit_stringshade", pos = {-17.59, 2.00, 309.46}},
@@ -2186,8 +2350,20 @@ local RADIOACTIVE_RAMPAGE_LEVELS = {
                     },
                 },
                 {
-                    Name = "Flytrap RNG",
-                    FromWave = 24,
+                    Type = "WaitWave",
+                    Wave = 24,
+                },
+                {
+                    Type = "StartPlace",
+                    Name = "Place4_FlytrapRNG",
+                    HardCap = 15,
+                    MaxCount = 5,
+                    SoftFail = false,
+                    MaxAttempts = 80,
+                    MaxCashWait = 900,
+                    Shuffle = true,
+                    ReserveSlots = 0,
+                    PauseUpgrade = true,
                     Units = {
                         {name = "unit_bronze_lucky_chomp", pos = {-15.25, 2.00, 311.39}},
                         {name = "unit_bronze_lucky_chomp", pos = {-19.71, 2.00, 309.31}},
@@ -2205,14 +2381,14 @@ local function loadRadioactiveRampageProfile(level)
     local entry = RADIOACTIVE_RAMPAGE_LEVELS[tostring(level or selectedRadioactiveRampageLevel or "Level 4")] or RADIOACTIVE_RAMPAGE_LEVELS["Level 4"]
     local url = entry.url
     local data = decodeFarmLua(httpGet(url))
-    if not profileMatches(data, "radioactive") or (entry.slots and type(data.Groups) ~= "table") or (not entry.slots and type(data.Groups) == "table") then
+    if not profileMatches(data, "radioactive") or type(data.Events) ~= "table" then
         data = deepCopy(entry.fallback)
         url = "embedded:RadioactiveRampage"
     end
     if not data then
         return nil, nil
     end
-    data.Difficulty = data.Difficulty or (entry.slots and "dif_impossible" or "dif_insane")
+    data.Difficulty = data.Difficulty or "dif_insane"
     return data, url
 end
 
@@ -2224,12 +2400,13 @@ local EE_NIGHT = {
             url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/EnchantedEncounter-Level5-Night.lua",
             fallback = {
                 Name = "Enchanted Encounter Night ( Level 5 )",
-                Engine = "slots",
-                Night = true,
                 Difficulty = "dif_impossible",
-                StopAutoSkipAtWave = 33,
+                MaxPlace = 20,
+                UfoReserve = 0,
                 DefaultAngle = {-math.pi, 0, -math.pi},
                 DefaultRotation = 180,
+                Night = true,
+                StopAutoSkipAtWave = 33,
                 Price = {
                     unit_trithorn = 333,
                     unit_mint_bloom = 3200,
@@ -2237,31 +2414,62 @@ local EE_NIGHT = {
                     unit_black_hole = 4500,
                     unit_bronze_lucky_chomp = 4500,
                 },
-                Limit = {
-                    unit_mint_bloom = 2,
-                    unit_stringshade = 3,
-                    unit_black_hole = 3,
-                    unit_bronze_lucky_chomp = 5,
-                },
-                Groups = {
+                Events = {
                     {
-                        Name = "Trithorn",
-                        FromWave = 0,
+                        Type = "StartPlace",
+                        Name = "Place1_Trithorn",
+                        HardCap = 1,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
                         Units = {
                             {name = "unit_trithorn", pos = {-340.24, 61.68, -109.75}},
                         },
                     },
                     {
-                        Name = "Pushpetal",
-                        FromWave = 4,
+                        Type = "StartUpgradeAll",
+                        Name = "Upgrade_Main",
+                        RequireMinPlaced = 1,
+                        UntilGameEnd = true,
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 4,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place2_Pushpetal",
+                        HardCap = 3,
+                        MaxCount = 2,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_mint_bloom", pos = {-329.00, 61.68, -93.79}},
                             {name = "unit_mint_bloom", pos = {-342.75, 61.68, -93.48}},
                         },
                     },
                     {
-                        Name = "Stringshade",
-                        FromWave = 21,
+                        Type = "WaitWave",
+                        Wave = 21,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place3_Stringshade",
+                        HardCap = 6,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_stringshade", pos = {-325.64, 61.68, -98.60}},
                             {name = "unit_stringshade", pos = {-326.06, 61.68, -95.98}},
@@ -2269,8 +2477,20 @@ local EE_NIGHT = {
                         },
                     },
                     {
-                        Name = "BlackHole",
-                        FromWave = 23,
+                        Type = "WaitWave",
+                        Wave = 23,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place4_BlackHole",
+                        HardCap = 9,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_black_hole", pos = {-327.37, 61.68, -102.69}},
                             {name = "unit_black_hole", pos = {-328.09, 61.68, -106.16}},
@@ -2278,8 +2498,20 @@ local EE_NIGHT = {
                         },
                     },
                     {
-                        Name = "Flytrap RNG",
-                        FromWave = 28,
+                        Type = "WaitWave",
+                        Wave = 28,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place5_FlytrapRNG",
+                        HardCap = 14,
+                        MaxCount = 5,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
                         Units = {
                             {name = "unit_bronze_lucky_chomp", pos = {-328.11, 61.68, -98.47}},
                             {name = "unit_bronze_lucky_chomp", pos = {-328.56, 61.68, -86.80}},
@@ -2298,7 +2530,7 @@ EE_NIGHT.load = function(level)
     local entry = EE_NIGHT.levels[tostring(level or EE_NIGHT.selected)] or EE_NIGHT.levels["Level 5"]
     local url = entry.url
     local data = decodeFarmLua(httpGet(url))
-    if not profileMatches(data, "night") or type(data.Groups) ~= "table" then
+    if not profileMatches(data, "night") or type(data.Events) ~= "table" then
         data = deepCopy(entry.fallback)
         url = "embedded:EnchantedEncounterNight"
     end
@@ -2755,7 +2987,10 @@ local function runFarmProfile(profile)
     local ufoReserve = tonumber(profile.UfoReserve or profile.ufoReserve) or 1
     local difficulty = profile.Difficulty or "dif_normal"
 
+    entitiesCache.night = profile.Night == true
+    entitiesCache.at = -100
     waitForGameStart(difficulty)
+    entitiesCache.at = -100
     if not autoFarmEnabled then return end
 
     local inGame = true
@@ -2839,11 +3074,29 @@ local function runFarmProfile(profile)
     end)
 
     task.spawn(function()
+        local stopSkipAt = tonumber(profile.StopAutoSkipAtWave)
+        local offWins = type(profile.AutoSkipOff) == "table" and profile.AutoSkipOff or {}
+        local wasOff = false
         while autoFarmEnabled and inGame do
             if autoSkipEnabled then
-                local okS = pcall(autoSkipStep, clockNow)
-                if not okS then
-                    task.wait(0.5)
+                local w = getWaveNumber()
+                local off = stopSkipAt ~= nil and w >= stopSkipAt
+                for _, o in ipairs(offWins) do
+                    if w >= (tonumber(o.FromWave) or 0) and w <= (tonumber(o.ToWave) or math.huge) then
+                        off = true
+                    end
+                end
+                if off ~= wasOff then
+                    wasOff = off
+                    skipState.lastAuto = nil
+                end
+                if off then
+                    ensureAutoSkip(false, clockNow)
+                else
+                    local okS = pcall(autoSkipStep, clockNow)
+                    if not okS then
+                        task.wait(0.5)
+                    end
                 end
             end
             task.wait(0.25)
@@ -3133,734 +3386,9 @@ local function runFarmProfile(profile)
     isPlacing.value = false
 end
 
-local runSlotFarm
-do
-local function eePhase(stage)
-    if stage == 2 then
-        return "Phase Two"
-    end
-    return "Phase One"
-end
-
-local function eeFmt(n)
-    local whole = math.floor((tonumber(n) or 0) + 0.5)
-    local str = tostring(whole)
-    local out = str:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-    out = out:gsub("^(-?),", "%1")
-    return out
-end
-
-local function eePivot(obj)
-    local ok, p = pcall(function()
-        if obj:IsA("Model") then
-            return obj:GetPivot().Position
-        end
-        if obj:IsA("BasePart") then
-            return obj.Position
-        end
-        return nil
-    end)
-    if ok then
-        return p
-    end
-    return nil
-end
-
-local function eeXZ(a, b)
-    local dx, dz = a.X - b.X, a.Z - b.Z
-    return math.sqrt(dx * dx + dz * dz)
-end
-
-local function eeChildren()
-    local folder = getEntitiesFolder()
-    if not folder then
-        return {}
-    end
-    local ok, list = pcall(function()
-        return folder:GetChildren()
-    end)
-    if ok and type(list) == "table" then
-        return list
-    end
-    return {}
-end
-
-local function eeIsUnit(n, unitName)
-    return string.lower(tostring(n or "")) == string.lower(tostring(unitName or ""))
-end
-
-local function eeUnits(unitName)
-    local out = {}
-    for _, c in ipairs(eeChildren()) do
-        local okN, n = pcall(function()
-            return c.Name
-        end)
-        if okN and eeIsUnit(n, unitName) then
-            out[#out + 1] = c
-        end
-    end
-    return out
-end
-
-local function eeCountAll(priceMap)
-    local n = 0
-    for name in pairs(priceMap or {}) do
-        n = n + #eeUnits(name)
-    end
-    return n
-end
-
-local function eeBuildGroups(rawGroups, priceMap)
-    local groups = {}
-    for gi, g in ipairs(type(rawGroups) == "table" and rawGroups or {}) do
-        local grp = {name = tostring(g.Name or ("Group" .. gi)), fromWave = tonumber(g.FromWave or g.Wave) or 0, slots = {}}
-        for si, entry in ipairs(g.Units or {}) do
-            local u = normalizeUnit(entry, priceMap)
-            if u and u.price then
-                grp.slots[#grp.slots + 1] = {
-                    name = u.name,
-                    pos = u.pos,
-                    price = u.price,
-                    idx = si,
-                    grp = grp,
-                    done = false,
-                    tries = 0,
-                    offset = 1,
-                    jit = 0.1,
-                    roundFails = 0,
-                    skippedAt = nil,
-                }
-            end
-        end
-        groups[#groups + 1] = grp
-    end
-    return groups
-end
-
-local function eeGroupProgress(grp)
-    local d = 0
-    for _, s in ipairs(grp.slots) do
-        if s.done then
-            d = d + 1
-        end
-    end
-    return d, #grp.slots
-end
-
-local function eeClaimSlot(slot, claimed, radius)
-    for _, m in ipairs(eeUnits(slot.name)) do
-        if not claimed[m] then
-            local p = eePivot(m)
-            if p and eeXZ(p, slot.pos) <= radius then
-                claimed[m] = true
-                slot.model = m
-                return true
-            end
-        end
-    end
-    return false
-end
-
-local function eeClaimAll(groups, claimed, radius)
-    local n = 0
-    for _, g in ipairs(groups) do
-        for _, s in ipairs(g.slots) do
-            if not s.done and eeClaimSlot(s, claimed, radius) then
-                s.done = true
-                n = n + 1
-            end
-        end
-    end
-    return n
-end
-
-local function eeInvoke(remote, timeout, ...)
-    local args = {...}
-    local state = {done = false, ok = false, ret = nil}
-    task.spawn(function()
-        local ok, ret = pcall(function()
-            return remote:InvokeServer(table.unpack(args))
-        end)
-        state.ok = ok
-        state.ret = ret
-        state.done = true
-    end)
-    local t0 = clockNow()
-    while not state.done and clockNow() - t0 < timeout do
-        task.wait(0.03)
-    end
-    if not state.done then
-        return "timeout", nil
-    end
-    if not state.ok then
-        return "error", state.ret
-    end
-    return "ok", state.ret
-end
-
-local function eeTryPlace(slot, defaultAngle, rot, claimed)
-    local off = PLACE_OFFSETS[slot.offset] or {0, 0}
-    local mag = slot.jit or 0.1
-    local pos = jitterPos(Vector3.new(slot.pos.X + off[1], slot.pos.Y, slot.pos.Z + off[2]), mag, mag)
-    slot.tries = slot.tries + 1
-    local before = {}
-    for _, m in ipairs(eeUnits(slot.name)) do
-        before[m] = true
-    end
-    local st, ret = eeInvoke(placeUnit, 5, slot.name, {
-        Valid = true,
-        Position = pos,
-        Attempt = slot.tries,
-        Rotation = rot,
-        CF = CFrame.new(pos) * defaultAngle,
-    })
-    local t0 = clockNow()
-    while clockNow() - t0 < 1.5 do
-        for _, m in ipairs(eeUnits(slot.name)) do
-            if not before[m] and not claimed[m] then
-                local p = eePivot(m)
-                if p and eeXZ(p, pos) <= PLACE_VERIFY_RADIUS then
-                    claimed[m] = true
-                    slot.model = m
-                    return true
-                end
-            end
-        end
-        if st == "ok" and ret == false and clockNow() - t0 > 0.3 then
-            break
-        end
-        if st == "ok" and ret == nil and clockNow() - t0 > 0.6 then
-            break
-        end
-        task.wait(0.03)
-    end
-    for _, m in ipairs(eeUnits(slot.name)) do
-        if not before[m] and not claimed[m] then
-            claimed[m] = true
-            slot.model = m
-            return true
-        end
-    end
-    return false
-end
-
-local function eeEnemyPassed(cfg)
-    local limit = tonumber(cfg.TriggerZ) or -147.468
-    local cmp = string.lower(tostring(cfg.Compare or "less"))
-    local match = string.lower(tostring(cfg.EnemyMatch or "enemy"))
-    for _, m in ipairs(eeChildren()) do
-        local okN, n = pcall(function()
-            return string.lower(tostring(m.Name))
-        end)
-        if okN and n:sub(1, 5) ~= "unit_" and n:find(match, 1, true) then
-            local p = eePivot(m)
-            if p and ((cmp == "greater" and p.Z > limit) or (cmp ~= "greater" and p.Z < limit)) then
-                return true
-            end
-        end
-    end
-    return false
-end
-
-local function eeStageFinished(groups, wave)
-    for _, g in ipairs(groups) do
-        if wave < g.fromWave then
-            return false
-        end
-        for _, s in ipairs(g.slots) do
-            if not s.done and not s.skippedAt then
-                return false
-            end
-        end
-    end
-    return true
-end
-
-local function eePickSlot(groups, wave, now)
-    local ready = nil
-    for _, g in ipairs(groups) do
-        if wave >= g.fromWave then
-            for _, s in ipairs(g.slots) do
-                if not s.done then
-                    if not s.skippedAt then
-                        return s
-                    end
-                    if not ready and now - s.skippedAt >= 20 then
-                        ready = s
-                    end
-                end
-            end
-        end
-    end
-    return ready
-end
-
-local function eeWaitForGameStart(difficulty)
-    local restarted = false
-    local t0 = clockNow()
-    while autoFarmEnabled do
-        if gameEndShown() then
-            farmStatusText = "Game End | Restart"
-            if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
-                lastRestartAt = clockNow()
-                local cur = entitiesCache.night and getCurrentContext() or nil
-                if cur then
-                    eeInvoke(restartGame, 5, cur, false)
-                else
-                    eeInvoke(restartGame, 5)
-                end
-                entitiesCache.at = -100
-                local w = 0
-                while autoFarmEnabled and isVisible("GameGui.Screen.Middle.GameEnd") and w < 10 do
-                    task.wait(0.05)
-                    w = w + 0.05
-                end
-            else
-                task.wait(0.2)
-            end
-            restarted = true
-        elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
-            farmStatusText = "Vote Difficulty"
-            eeInvoke(placeDifficultyVote, 5, difficulty)
-            local w = 0
-            while autoFarmEnabled and isVisible("GameGui.Screen.Middle.DifficultyVote") and w < 5 do
-                task.wait(0.05)
-                w = w + 0.05
-            end
-            return restarted
-        else
-            if restarted then
-                return true
-            end
-            if getWaveNumber() >= 1 or clockNow() - t0 > 2 then
-                return false
-            end
-        end
-        task.wait(0.05)
-    end
-    return restarted
-end
-
-function runSlotFarm(profile, freshStart)
-    local priceMap = getPriceMap(profile)
-    local defaultAngle = getDefaultAngle(profile)
-    local rot = tonumber(profile.DefaultRotation) or 180
-    local difficulty = profile.Difficulty or "dif_impossible"
-    local limits = type(profile.Limit) == "table" and profile.Limit or {}
-
-    entitiesCache.night = profile.Night == true
-    entitiesCache.at = -100
-    farmStatusText = "Waiting Game Start"
-    local restarted = eeWaitForGameStart(difficulty)
-    entitiesCache.at = -100
-    if not autoFarmEnabled then
-        return false
-    end
-    local fresh = freshStart or restarted
-
-    local inGame = true
-    local stage = 1
-    local triggered = false
-    local upgradeAllowed = false
-    local claimed = {}
-    local groups1 = eeBuildGroups(profile.Groups, priceMap)
-    local s2 = type(profile.Stage2) == "table" and profile.Stage2 or nil
-    local groups2 = s2 and eeBuildGroups(s2.Groups, priceMap) or {}
-    local startedAt = clockNow()
-    local waveCache, waveMax = 0, 0
-    local unitFail = {}
-    local placedThisGame = 0
-    local lastVote = 0
-    local staleWave = fresh and getWaveNumber() or 0
-    if staleWave <= 2 then
-        staleWave = 0
-    end
-
-    local function readWave()
-        local w = getWaveNumber()
-        if staleWave > 0 then
-            if w == staleWave or w == 0 then
-                return waveCache
-            end
-            staleWave = 0
-        end
-        if w > 0 then
-            waveCache = w
-            if w > waveMax then
-                waveMax = w
-            end
-        end
-        return waveCache
-    end
-
-    if not fresh then
-        local c2 = #groups2 > 0 and eeClaimAll(groups2, claimed, 2.5) or 0
-        if c2 > 0 then
-            stage = 2
-            triggered = true
-        end
-        placedThisGame = c2 + eeClaimAll(groups1, claimed, 2.5)
-    end
-
-    local function active()
-        return autoFarmEnabled and inGame
-    end
-
-    task.spawn(function()
-        runSpeedMonitor(active, clockNow)
-    end)
-
-    local skipOffNow = false
-    local offWins = type(profile.AutoSkipOff) == "table" and profile.AutoSkipOff or {}
-
-    task.spawn(function()
-        local stopSkipAt = tonumber(profile.StopAutoSkipAtWave)
-        local skipStopped = false
-        while active() do
-            local w = readWave()
-            local offNow = false
-            for _, o in ipairs(offWins) do
-                if w >= (tonumber(o.FromWave) or 0) and w <= (tonumber(o.ToWave) or math.huge) then
-                    offNow = true
-                end
-            end
-            if offNow ~= skipOffNow then
-                skipOffNow = offNow
-                skipState.lastAuto = nil
-            end
-            if autoSkipEnabled then
-                if stopSkipAt and w >= stopSkipAt then
-                    if not skipStopped then
-                        skipStopped = true
-                        skipState.lastAuto = nil
-                    end
-                    ensureAutoSkip(false, clockNow)
-                elseif skipOffNow then
-                    ensureAutoSkip(false, clockNow)
-                else
-                    local okS = pcall(autoSkipStep, clockNow)
-                    if not okS then
-                        task.wait(0.5)
-                    end
-                end
-            end
-            task.wait(0.25)
-        end
-    end)
-
-    local function waveInUpgradeWindow()
-        if type(profile.UpgradeWindows) ~= "table" then
-            return true
-        end
-        local w = readWave()
-        for _, uw in ipairs(profile.UpgradeWindows) do
-            if w >= (tonumber(uw.FromWave) or 0) and w <= (tonumber(uw.ToWave) or math.huge) then
-                return true
-            end
-        end
-        return false
-    end
-
-    task.spawn(function()
-        while active() do
-            if upgradeAllowed and waveInUpgradeWindow() then
-                smartUpgradeAll()
-                task.wait(0.15 + math.random() * 0.2)
-            else
-                task.wait(0.1)
-            end
-        end
-    end)
-
-    if s2 then
-        task.spawn(function()
-            local need = tonumber(s2.ConfirmChecks) or 2
-            local minWave = tonumber(s2.MinWave) or 0
-            local streak = 0
-            while active() and not triggered do
-                local wave = readWave()
-                if stage == 1 and wave >= minWave and eeStageFinished(groups1, wave) and eeEnemyPassed(s2) then
-                    streak = streak + 1
-                    if streak >= need then
-                        triggered = true
-                        break
-                    end
-                else
-                    streak = 0
-                end
-                task.wait(0.2)
-            end
-        end)
-    end
-
-    if type(profile.Abilities) == "table" and #profile.Abilities > 0 then
-        task.spawn(function()
-            local lastFire = {}
-            while active() do
-                for _, ab in ipairs(profile.Abilities) do
-                    local unitName = tostring(ab.Unit or ab.unit or "")
-                    if unitName ~= "" then
-                        local ids = getAbilityIds(unitName)
-                        local interval = tonumber(ab.Interval or ab.interval) or 2
-                        local now = clockNow()
-                        if #ids > 0 and (not lastFire[unitName] or now - lastFire[unitName] >= interval) then
-                            lastFire[unitName] = now
-                            for _, id in ipairs(ids) do
-                                pcall(function()
-                                    activateUnitAbility:InvokeServer(id)
-                                end)
-                            end
-                        end
-                    end
-                end
-                task.wait(0.5)
-            end
-        end)
-    end
-
-    local function runStage2()
-        stage = 2
-        upgradeAllowed = false
-        farmStatusText = string.format("Wave %d | Sell Phase One", waveCache)
-        if s2.SellAll ~= false then
-            eeInvoke(sellAll, 5)
-            local t0 = clockNow()
-            while active() and eeCountAll(priceMap) > 0 and clockNow() - t0 < 1.5 do
-                task.wait(0.05)
-            end
-            for k in pairs(placedUnitIds) do
-                placedUnitIds[k] = nil
-            end
-            claimed = {}
-        end
-    end
-
-    local function reviveLostSlots()
-        if stage ~= 1 then
-            return
-        end
-        for _, g in ipairs(groups1) do
-            for _, s in ipairs(g.slots) do
-                if s.done and s.model then
-                    local okP, par = pcall(function()
-                        return s.model.Parent
-                    end)
-                    if okP and not par then
-                        s.done = false
-                        s.model = nil
-                        s.skippedAt = nil
-                        s.roundFails = 0
-                        s.offset = 1
-                        s.jit = 0.1
-                    end
-                end
-            end
-        end
-    end
-
-    local function newGameDetected()
-        local w = getWaveNumber()
-        if staleWave == 0 and w > 0 and waveMax >= 3 and w <= waveMax - 2 then
-            return true
-        end
-        if stage ~= 2 then
-            return false
-        end
-        local done, alive = 0, 0
-        for _, g in ipairs(groups2) do
-            for _, s in ipairs(g.slots) do
-                if s.done and s.model then
-                    done = done + 1
-                    local okP, par = pcall(function()
-                        return s.model.Parent
-                    end)
-                    if okP and par then
-                        alive = alive + 1
-                    end
-                end
-            end
-        end
-        return done >= 3 and alive == 0
-    end
-
-    while active() do
-        local acted = false
-        local okTick = pcall(function()
-            if gameEndShown() then
-                inGame = false
-                farmStatusText = string.format("Wave %d | Game End", waveCache)
-                return
-            end
-            if isVisible("GameGui.Screen.Middle.DifficultyVote") then
-                if clockNow() - lastVote >= 1 then
-                    lastVote = clockNow()
-                    farmStatusText = "Vote Difficulty"
-                    eeInvoke(placeDifficultyVote, 5, difficulty)
-                end
-                startedAt = clockNow()
-                return
-            end
-            if newGameDetected() then
-                inGame = false
-                farmStatusText = "New Game"
-                return
-            end
-            reviveLostSlots()
-            local now = clockNow()
-            local wave = readWave()
-            local cash = getCashAmount()
-            if stage == 1 and triggered and s2 then
-                runStage2()
-                acted = true
-                return
-            end
-            local groups = stage == 1 and groups1 or groups2
-            local slot = eePickSlot(groups, wave, now)
-
-            if not slot then
-                local winOk = true
-                if type(profile.UpgradeWindows) == "table" then
-                    winOk = false
-                    local placedAll = true
-                    for _, g in ipairs(groups) do
-                        for _, sl in ipairs(g.slots) do
-                            if not sl.done and not sl.skippedAt then
-                                placedAll = false
-                            end
-                        end
-                    end
-                    for _, uw in ipairs(profile.UpgradeWindows) do
-                        if wave >= (tonumber(uw.FromWave) or 0) and wave <= (tonumber(uw.ToWave) or math.huge) and (not uw.AfterAllPlaced or placedAll) then
-                            winOk = true
-                        end
-                    end
-                end
-                if not winOk then
-                    upgradeAllowed = false
-                    local nextGroup = nil
-                    for _, g in ipairs(groups) do
-                        if g.fromWave > wave and (not nextGroup or g.fromWave < nextGroup.fromWave) then
-                            nextGroup = g
-                        end
-                    end
-                    if nextGroup and nextGroup.slots[1] then
-                        farmStatusText = string.format("Wave %d | %s | Save Cash (Next: %s At Wave %d)", wave, eePhase(stage), eeUnitLabel(nextGroup.slots[1].name), nextGroup.fromWave)
-                    else
-                        farmStatusText = string.format("Wave %d | %s | Idle", wave, eePhase(stage))
-                    end
-                    return
-                end
-                upgradeAllowed = true
-                local nextGroup = nil
-                for _, g in ipairs(groups) do
-                    if g.fromWave > wave and (not nextGroup or g.fromWave < nextGroup.fromWave) then
-                        nextGroup = g
-                    end
-                end
-                if nextGroup and nextGroup.slots[1] then
-                    farmStatusText = string.format("Wave %d | %s | Upgrade (Next: %s At Wave %d)", wave, eePhase(stage), eeUnitLabel(nextGroup.slots[1].name), nextGroup.fromWave)
-                else
-                    farmStatusText = string.format("Wave %d | %s | Upgrade", wave, eePhase(stage))
-                end
-                return
-            end
-
-            upgradeAllowed = false
-            local d, total = eeGroupProgress(slot.grp)
-            local lim = tonumber(limits[slot.name])
-            if lim and #eeUnits(slot.name) >= lim then
-                slot.done = true
-                acted = true
-                return
-            end
-            if eeClaimSlot(slot, claimed, 2.5) or (entitiesCache.night and slot.tries >= 3 and eeClaimSlot(slot, claimed, 1e9)) then
-                slot.done = true
-                acted = true
-                return
-            end
-            if cash < slot.price then
-                farmStatusText = string.format("Wave %d | %s | Wait Cash For %s %d/%d (%s/%s)", wave, eePhase(stage), eeUnitLabel(slot.name), d + 1, total, eeFmt(cash), eeFmt(slot.price))
-                if not slot.waitSince then
-                    slot.waitSince = now
-                end
-                if cash <= 0 and now - slot.waitSince >= 6 and now - (slot.lastForce or 0) >= 4 then
-                    slot.lastForce = now
-                    if eeTryPlace(slot, defaultAngle, rot, claimed) then
-                        slot.done = true
-                        slot.skippedAt = nil
-                        slot.waitSince = nil
-                        unitFail[slot.name] = 0
-                        acted = true
-                        placedThisGame = placedThisGame + 1
-                    end
-                end
-                return
-            end
-            slot.waitSince = nil
-            farmStatusText = string.format("Wave %d | %s | Place Unit %s %d/%d", wave, eePhase(stage), eeUnitLabel(slot.name), d + 1, total)
-            if eeTryPlace(slot, defaultAngle, rot, claimed) then
-                slot.done = true
-                slot.skippedAt = nil
-                unitFail[slot.name] = 0
-                acted = true
-                placedThisGame = placedThisGame + 1
-                return
-            end
-            local jitFloor = (slot.jit or 0.1) <= 0.0301
-            slot.jit = math.max(0.03, (slot.jit or 0.1) - 0.01)
-            if placedThisGame == 0 or now - startedAt < 8 or wave < 1 then
-                return
-            end
-            if jitFloor then
-                slot.jit = 0.1
-                slot.offset = slot.offset + 1
-                if slot.offset > #PLACE_OFFSETS then
-                    slot.offset = 1
-                end
-            end
-            if slot.grp == groups[1] then
-                return
-            end
-            slot.roundFails = slot.roundFails + 1
-            if slot.roundFails >= 15 then
-                slot.roundFails = 0
-                slot.skippedAt = clockNow()
-            end
-            unitFail[slot.name] = (unitFail[slot.name] or 0) + 1
-            if unitFail[slot.name] >= 30 then
-                unitFail[slot.name] = 0
-                local t = clockNow()
-                for _, g in ipairs(groups) do
-                    for _, o in ipairs(g.slots) do
-                        if o.name == slot.name and not o.done and g ~= groups[1] then
-                            o.skippedAt = t
-                            o.roundFails = 0
-                        end
-                    end
-                end
-            end
-        end)
-        if skipOffNow and autoSkipEnabled and not farmStatusText:find("Auto Skip Off", 1, true) then
-            farmStatusText = farmStatusText .. " | Auto Skip Off"
-        end
-        if not okTick then
-            task.wait(0.3)
-        elseif acted then
-            task.wait(0.03)
-        else
-            task.wait(0.1)
-        end
-    end
-    inGame = false
-    upgradeAllowed = false
-    return autoFarmEnabled
-end
-end
-
 local function startAutoFarm()
     if farmThread then return end
     farmThread = task.spawn(function()
-        local fresh = false
         while autoFarmEnabled do
             if not farmProfile then
                 local data = loadActiveProfile()
@@ -3868,13 +3396,9 @@ local function startAutoFarm()
                     farmProfile = data
                 end
             end
-            if farmProfile and type(farmProfile.Groups) == "table" then
-                local okRun, res = pcall(runSlotFarm, farmProfile, fresh)
-                fresh = (not okRun) or res == true
-                task.wait(okRun and 0.05 or 0.5)
-            elseif farmProfile then
-                runFarmProfile(farmProfile)
-                task.wait(1)
+            if farmProfile then
+                local okRun = pcall(runFarmProfile, farmProfile)
+                task.wait(okRun and 1 or 2)
             else
                 task.wait(2)
             end
