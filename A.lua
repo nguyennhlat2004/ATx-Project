@@ -817,19 +817,19 @@ end
 local entitiesCache = {folder = nil, at = -100, night = false}
 
 local function getCurrentContext()
-    local best, bestN, hasE = nil, -1, false
+    local best = nil
     pcall(function()
         local ctx = workspace:FindFirstChild("Contexts")
         if not ctx then
             return
         end
         for _, c in ipairs(ctx:GetChildren()) do
-            local n = tonumber(tostring(c.Name):match("(%d+)$")) or 0
-            local e = c:FindFirstChild("Entities") ~= nil
-            if (e and not hasE) or (e == hasE and n > bestN) then
-                best, bestN, hasE = c, n, e
+            if c:FindFirstChild("Entities") then
+                best = c
+                return
             end
         end
+        best = ctx:GetChildren()[1]
     end)
     return best
 end
@@ -1146,7 +1146,14 @@ local function waitForGameStart(difficulty)
                 waitUntilHidden("GameGui.Screen.Middle.GameEnd")
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
-            pcall(function() placeDifficultyVote:InvokeServer(difficulty) end)
+            pcall(function()
+                local cur = entitiesCache.night and getCurrentContext() or nil
+                if cur then
+                    placeDifficultyVote:InvokeServer(cur, difficulty)
+                else
+                    placeDifficultyVote:InvokeServer(difficulty)
+                end
+            end)
             waitUntilHidden("GameGui.Screen.Middle.DifficultyVote")
         else
             break
@@ -2451,8 +2458,8 @@ local EE_NIGHT = {
                         ReserveSlots = 0,
                         PauseUpgrade = true,
                         Units = {
-                            {name = "unit_mint_bloom", pos = {-329.00, 61.68, -93.79}},
-                            {name = "unit_mint_bloom", pos = {-342.75, 61.68, -93.48}},
+                            {name = "unit_mint_bloom", pos = {-330.29, 65.75, -129.11}},
+                            {name = "unit_mint_bloom", pos = {-339.21, 61.68, -128.51}},
                         },
                     },
                     {
