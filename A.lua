@@ -2458,8 +2458,8 @@ local EE_NIGHT = {
                         ReserveSlots = 0,
                         PauseUpgrade = true,
                         Units = {
-                            {name = "unit_mint_bloom", pos = {-330.29, 65.75, -129.11}},
-                            {name = "unit_mint_bloom", pos = {-339.21, 61.68, -128.51}},
+                            {name = "unit_mint_bloom", pos = {-330.85, 61.68, -128.24}},
+                            {name = "unit_mint_bloom", pos = {-339.21, 61.68, -128.61}},
                         },
                     },
                     {
@@ -3642,7 +3642,6 @@ if TabMain then
     radioactiveRampageToggle = TabMain:AddToggle({
         Name = "Auto Farm Radioactive Rampage",
         Default = false,
-        Flag = "AutoFarmRadioactiveRampage",
         Callback = function(Value)
             if Value then
                 startFarmFor("RadioactiveRampage")
@@ -3676,7 +3675,6 @@ if TabMain then
     enchantedEncounterToggle = TabMain:AddToggle({
         Name = "Auto Farm Enchanted Encounter",
         Default = false,
-        Flag = "AutoFarmEnchantedEncounter",
         Callback = function(Value)
             if Value then
                 startFarmFor("EnchantedEncounter")
@@ -3706,7 +3704,6 @@ if TabMain then
     gardenGrindToggle = TabMain:AddToggle({
         Name = "Auto Farm Garden Grind",
         Default = false,
-        Flag = "AutoFarmGardenGrind",
         Callback = function(Value)
             if Value then
                 startFarmFor("GardenGrind")
@@ -3736,7 +3733,6 @@ if TabMain then
     EE_NIGHT.toggle = TabMain:AddToggle({
         Name = "Auto Farm Enchanted Encounter Night",
         Default = false,
-        Flag = "AutoFarmEnchantedEncounterNight",
         Callback = function(Value)
             if Value then
                 startFarmFor("EnchantedEncounterNight")
