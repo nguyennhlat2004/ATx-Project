@@ -814,13 +814,27 @@ local function getWaveNumber()
     return 0
 end
 
-local entitiesCache = {folder = nil, at = -100, night = false}
+local entitiesCache = {folder = nil, at = -100, night = false, lastCtx = nil, hooked = false, gui = {}, scanAt = {}}
 
 local function getCurrentContext()
     local best = nil
     pcall(function()
         local ctx = workspace:FindFirstChild("Contexts")
         if not ctx then
+            return
+        end
+        if not entitiesCache.hooked then
+            entitiesCache.hooked = true
+            pcall(function()
+                ctx.ChildAdded:Connect(function(c)
+                    entitiesCache.lastCtx = c
+                    entitiesCache.at = -100
+                end)
+            end)
+        end
+        local lc = entitiesCache.lastCtx
+        if lc and lc.Parent == ctx then
+            best = lc
             return
         end
         for _, c in ipairs(ctx:GetChildren()) do
@@ -1030,11 +1044,13 @@ end
 
 local function isVisible(path)
     local shown = false
+    local exists = true
     pcall(function()
         local cur = player.PlayerGui
         for part in path:gmatch("[^.]+") do
             cur = cur:FindFirstChild(part)
             if not cur then
+                exists = false
                 return
             end
             if cur:IsA("LayerCollector") then
@@ -1048,6 +1064,45 @@ local function isVisible(path)
             end
         end
         shown = true
+    end)
+    if exists or not entitiesCache.night then
+        return shown
+    end
+    local name = path:match("([^.]+)$") or path
+    pcall(function()
+        local pg = player.PlayerGui
+        local obj = entitiesCache.gui[name]
+        if obj and not obj:IsDescendantOf(pg) then
+            obj = nil
+            entitiesCache.gui[name] = nil
+        end
+        if not obj and os.clock() - (entitiesCache.scanAt[name] or -100) >= 1 then
+            entitiesCache.scanAt[name] = os.clock()
+            for _, d in ipairs(pg:GetDescendants()) do
+                if d.Name == name and (d:IsA("GuiObject") or d:IsA("LayerCollector")) then
+                    obj = d
+                    break
+                end
+            end
+            entitiesCache.gui[name] = obj
+        end
+        if not obj then
+            return
+        end
+        local cur = obj
+        while cur and cur ~= pg do
+            if cur:IsA("LayerCollector") then
+                if cur.Enabled == false then
+                    return
+                end
+            elseif cur:IsA("GuiObject") then
+                if cur.Visible ~= true then
+                    return
+                end
+            end
+            cur = cur.Parent
+        end
+        shown = cur == pg
     end)
     return shown
 end
@@ -1130,10 +1185,12 @@ end
 
 local function waitForGameStart(difficulty)
     difficulty = difficulty or "dif_normal"
+    local restartedAt = nil
     while autoFarmEnabled do
         if gameEndShown() then
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
+                restartedAt = clockNow()
                 pcall(function()
                     local cur = entitiesCache.night and getCurrentContext() or nil
                     if cur then
@@ -1146,15 +1203,32 @@ local function waitForGameStart(difficulty)
                 waitUntilHidden("GameGui.Screen.Middle.GameEnd")
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
-            pcall(function()
-                local cur = entitiesCache.night and getCurrentContext() or nil
-                if cur then
-                    placeDifficultyVote:InvokeServer(cur, difficulty)
-                else
-                    placeDifficultyVote:InvokeServer(difficulty)
+            if entitiesCache.night then
+                local nextVote = 0
+                while autoFarmEnabled and isVisible("GameGui.Screen.Middle.DifficultyVote") do
+                    if clockNow() >= nextVote then
+                        nextVote = clockNow() + 3
+                        farmStatusText = "Vote Difficulty"
+                        pcall(function()
+                            local cur = getCurrentContext()
+                            if cur then
+                                placeDifficultyVote:InvokeServer(cur, difficulty)
+                            else
+                                placeDifficultyVote:InvokeServer(difficulty)
+                            end
+                        end)
+                    end
+                    task.wait(0.25)
                 end
-            end)
-            waitUntilHidden("GameGui.Screen.Middle.DifficultyVote")
+                restartedAt = nil
+            else
+                pcall(function()
+                    placeDifficultyVote:InvokeServer(difficulty)
+                end)
+                waitUntilHidden("GameGui.Screen.Middle.DifficultyVote")
+            end
+        elseif entitiesCache.night and restartedAt and clockNow() - restartedAt < 25 then
+            farmStatusText = "Waiting Vote"
         else
             break
         end
