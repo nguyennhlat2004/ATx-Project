@@ -848,6 +848,18 @@ local function getCurrentContext()
     return best
 end
 
+local function contextMode()
+    if entitiesCache.night then
+        return true
+    end
+    local yes = false
+    pcall(function()
+        local cur = getCurrentContext()
+        yes = cur ~= nil and cur:FindFirstChild("Entities") ~= nil
+    end)
+    return yes
+end
+
 local function entitiesHasObjects(folder)
     local found = false
     pcall(function()
@@ -1090,7 +1102,7 @@ local function isVisible(path)
         end
         shown = true
     end)
-    if exists or not entitiesCache.night then
+    if exists or not contextMode() then
         return shown
     end
     local name = path:match("([^.]+)$") or path
@@ -1217,7 +1229,7 @@ local function waitForGameStart(difficulty)
                 lastRestartAt = clockNow()
                 restartedAt = clockNow()
                 pcall(function()
-                    local cur = entitiesCache.night and getCurrentContext() or nil
+                    local cur = contextMode() and getCurrentContext() or nil
                     if cur then
                         restartGame:InvokeServer(cur, false)
                     else
@@ -1228,7 +1240,7 @@ local function waitForGameStart(difficulty)
                 waitUntilHidden("GameGui.Screen.Middle.GameEnd")
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
-            if entitiesCache.night then
+            if contextMode() then
                 local nextVote = 0
                 while autoFarmEnabled and isVisible("GameGui.Screen.Middle.DifficultyVote") do
                     if clockNow() >= nextVote then
@@ -1252,7 +1264,7 @@ local function waitForGameStart(difficulty)
                 end)
                 waitUntilHidden("GameGui.Screen.Middle.DifficultyVote")
             end
-        elseif entitiesCache.night and restartedAt and clockNow() - restartedAt < 25 then
+        elseif restartedAt and clockNow() - restartedAt < 25 and contextMode() then
             farmStatusText = "Waiting Vote"
         else
             break
