@@ -2684,7 +2684,10 @@ local GG5 = {
                             Ref = "unit_trithorn",
                             RefPos = {-846.80, 61.93, -165.55},
                             MaxDX = 75,
+                            ZBand = 15,
                             PassZ = true,
+                            TowardZ = -145.56,
+                            Window = 2,
                         },
                     },
                 },
@@ -3616,7 +3619,8 @@ local function runFarmProfile(profile)
         end)
     end
 
-    local enemyFirstZ = setmetatable({}, {__mode = "k"})
+    local enemyState = setmetatable({}, {__mode = "k"})
+    local abilityEventAt = -100
     local function abilityTriggerMet(cfg)
         local folder = getEntitiesFolder()
         if not folder then
@@ -3638,27 +3642,49 @@ local function runFarmProfile(profile)
             return false
         end
         local maxDX = tonumber(cfg.MaxDX) or 75
-        local hit = false
+        local band = tonumber(cfg.ZBand) or 15
+        local towardZ = tonumber(cfg.TowardZ)
+        local dir = towardZ and ((towardZ - ref.Z) >= 0 and 1 or -1) or nil
+        local event = false
         pcall(function()
             for _, m in ipairs(folder:GetChildren()) do
                 local n = string.lower(tostring(m.Name))
                 if n:sub(1, 5) ~= "unit_" and n:find("enemy", 1, true) and m:IsA("Model") then
                     local pos = m:GetPivot().Position
-                    if math.abs(pos.X - ref.X) <= maxDX then
-                        hit = true
-                    end
-                    if cfg.PassZ then
-                        local fz = enemyFirstZ[m]
-                        if fz == nil then
-                            enemyFirstZ[m] = pos.Z
-                        elseif (fz - ref.Z) * (pos.Z - ref.Z) < 0 then
-                            hit = true
+                    local st = enemyState[m]
+                    if not st then
+                        st = {firstZ = pos.Z, near = math.abs(pos.X - ref.X) <= maxDX and math.abs(pos.Z - ref.Z) <= band, crossed = false}
+                        if dir then
+                            st.crossed = dir * (pos.Z - ref.Z) > 0
+                        end
+                        enemyState[m] = st
+                    else
+                        local nearNow = math.abs(pos.X - ref.X) <= maxDX and math.abs(pos.Z - ref.Z) <= band
+                        if nearNow and not st.near then
+                            st.near = true
+                            event = true
+                        end
+                        if cfg.PassZ and not st.crossed then
+                            local passed
+                            if dir then
+                                passed = dir * (pos.Z - ref.Z) > 0
+                            else
+                                passed = (st.firstZ - ref.Z) * (pos.Z - ref.Z) < 0
+                            end
+                            if passed then
+                                st.crossed = true
+                                event = true
+                            end
                         end
                     end
                 end
             end
         end)
-        return hit
+        local now = clockNow()
+        if event then
+            abilityEventAt = now
+        end
+        return now - abilityEventAt <= (tonumber(cfg.Window) or 2)
     end
 
     if type(profile.Abilities) == "table" and #profile.Abilities > 0 then
