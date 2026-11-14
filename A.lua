@@ -848,11 +848,36 @@ local function getCurrentContext()
     return best
 end
 
+local function entitiesHasObjects(folder)
+    local found = false
+    pcall(function()
+        for _, k in ipairs(folder:GetChildren()) do
+            local nm = tostring(k.Name)
+            if nm:sub(1, 5) == "unit_" or nm:sub(1, 6) == "enemy_" then
+                found = true
+                return
+            end
+        end
+    end)
+    return found
+end
+
 local function getEntitiesFolder()
     if not entitiesCache.night then
         local ok, folder = pcall(function()
             return workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Entities")
         end)
+        if ok and folder and entitiesHasObjects(folder) then
+            return folder
+        end
+        local ctxE = nil
+        pcall(function()
+            local cur = getCurrentContext()
+            ctxE = cur and cur:FindFirstChild("Entities")
+        end)
+        if ctxE and (not (ok and folder) or entitiesHasObjects(ctxE)) then
+            return ctxE
+        end
         if ok and folder then
             return folder
         end
@@ -3264,6 +3289,10 @@ local function runFarmProfile(profile)
     end
 
     local function refreshPlacedFromWorld()
+        local world = countUnitsInPriceMap(priceMap)
+        if stageState.stage == 1 and world > placedCounter.value then
+            placedCounter.value = world
+        end
         return placedCounter.value
     end
 
@@ -3387,8 +3416,10 @@ local function runFarmProfile(profile)
     local function waitWaveAtLeast(target)
         local t = 0
         while autoFarmEnabled and stillInGame() and getWaveNumber() < target do
-            if upgradeState.enabled and not upgradeState.pause then
+            if canUpgrade() then
                 farmStatusText = string.format("Wave %d | Upgrade (Until Wave %d)", getWaveNumber(), target)
+            elseif upgradeState.enabled and not upgradeState.pause and upgradeState.minPlaced > 0 and refreshPlacedFromWorld() < upgradeState.minPlaced then
+                farmStatusText = string.format("Wave %d | Upgrade Blocked (Units %d/%d)", getWaveNumber(), refreshPlacedFromWorld(), upgradeState.minPlaced)
             else
                 farmStatusText = string.format("Wave %d | Waiting Wave %d", getWaveNumber(), target)
             end
@@ -3686,8 +3717,10 @@ local function runFarmProfile(profile)
         if stage2Cfg and stageState.triggered and stageState.stage == 1 then
             runStage2()
         end
-        if upgradeState.enabled and not upgradeState.pause then
+        if canUpgrade() then
             farmStatusText = string.format("Wave %d | Upgrade", getWaveNumber())
+        elseif upgradeState.enabled and not upgradeState.pause and upgradeState.minPlaced > 0 and refreshPlacedFromWorld() < upgradeState.minPlaced then
+            farmStatusText = string.format("Wave %d | Upgrade Blocked (Units %d/%d)", getWaveNumber(), refreshPlacedFromWorld(), upgradeState.minPlaced)
         end
         task.wait(0.5)
     end
