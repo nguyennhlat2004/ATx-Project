@@ -6,9 +6,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 local G = (getgenv and getgenv()) or _G
 
+G.NxsMacroActive = false
 local MACRO_FOLDER = "NxsMacro"
 local HISTORY_FILE = MACRO_FOLDER .. "/history.json"
-local IGNORE_WORDS = {"restart", "replay", "teleport", "chat", "ping", "analytic", "camera", "mouse", "heartbeat"}
 
 local function clockNow()
     local ok, t = pcall(function()
@@ -20,13 +20,71 @@ local function clockNow()
     return os.clock()
 end
 
+local ctxState = {last = nil, hooked = false, gui = {}, scanAt = {}}
+
+local function currentContext()
+    local best = nil
+    pcall(function()
+        local ctx = workspace:FindFirstChild("Contexts")
+        if not ctx then
+            return
+        end
+        if not ctxState.hooked then
+            ctxState.hooked = true
+            pcall(function()
+                ctx.ChildAdded:Connect(function(c)
+                    ctxState.last = c
+                end)
+            end)
+        end
+        local lc = ctxState.last
+        if lc and lc.Parent == ctx then
+            best = lc
+            return
+        end
+        for _, c in ipairs(ctx:GetChildren()) do
+            if c:FindFirstChild("Entities") then
+                best = c
+                return
+            end
+        end
+        best = ctx:GetChildren()[1]
+    end)
+    return best
+end
+
+local function contextMode()
+    local yes = false
+    pcall(function()
+        local cur = currentContext()
+        yes = cur ~= nil and cur:FindFirstChild("Entities") ~= nil
+    end)
+    return yes
+end
+
+local function hasObjects(folder)
+    local found = false
+    pcall(function()
+        for _, k in ipairs(folder:GetChildren()) do
+            local nm = tostring(k.Name)
+            if nm:sub(1, 5) == "unit_" or nm:sub(1, 6) == "enemy_" then
+                found = true
+                return
+            end
+        end
+    end)
+    return found
+end
+
 local function isShown(path)
     local shown = false
+    local exists = true
     pcall(function()
         local cur = player.PlayerGui
         for part in path:gmatch("[^.]+") do
             cur = cur:FindFirstChild(part)
             if not cur then
+                exists = false
                 return
             end
             if cur:IsA("LayerCollector") then
@@ -41,6 +99,45 @@ local function isShown(path)
         end
         shown = true
     end)
+    if exists or not contextMode() then
+        return shown
+    end
+    local name = path:match("([^.]+)$") or path
+    pcall(function()
+        local pg = player.PlayerGui
+        local obj = ctxState.gui[name]
+        if obj and not obj:IsDescendantOf(pg) then
+            obj = nil
+            ctxState.gui[name] = nil
+        end
+        if not obj and os.clock() - (ctxState.scanAt[name] or -100) >= 1 then
+            ctxState.scanAt[name] = os.clock()
+            for _, d in ipairs(pg:GetDescendants()) do
+                if d.Name == name and (d:IsA("GuiObject") or d:IsA("LayerCollector")) then
+                    obj = d
+                    break
+                end
+            end
+            ctxState.gui[name] = obj
+        end
+        if not obj then
+            return
+        end
+        local cur = obj
+        while cur and cur ~= pg do
+            if cur:IsA("LayerCollector") then
+                if cur.Enabled == false then
+                    return
+                end
+            elseif cur:IsA("GuiObject") then
+                if cur.Visible ~= true then
+                    return
+                end
+            end
+            cur = cur.Parent
+        end
+        shown = cur == pg
+    end)
     return shown
 end
 
@@ -48,26 +145,52 @@ local PATH_GAMEEND = "GameGui.Screen.Middle.GameEnd"
 local PATH_VOTE = "GameGui.Screen.Middle.DifficultyVote"
 local PATH_SKIP = "GameGuiNoInset.Screen.Top.SkipWave"
 
-local function gameEndShown()
-    if not isShown(PATH_GAMEEND) then
-        return false
-    end
-    task.wait(0.3)
-    return isShown(PATH_GAMEEND)
+local lastWaveRead = 0
+local function autoSkipColorState()
+    local state = nil
+    pcall(function()
+        local c = player.PlayerGui.GameGuiNoInset.Screen.Top.WaveControls.WaveControls.AutoSkip.UIGradient.Color.Keypoints[1].Value
+        if c.G > 0.8 and c.R < 0.6 then
+            state = true
+        elseif c.R > 0.9 and c.G > 0.5 and c.G < 0.8 and c.B < 0.25 then
+            state = false
+        end
+    end)
+    return state
 end
 
-local lastWaveRead = 0
-local function getWave()
-    local w = nil
-    pcall(function()
-        local t = player.PlayerGui.GameGuiNoInset.Screen.Top.GameInfo.Content.Waves.Title.Text
-        local a = tostring(t):match("(%d+)%s*/%s*%d+") or tostring(t):match("[Ww]ave%s*(%d+)")
-        w = tonumber(a)
-    end)
+local lastMaxRead = 0
+local function getWaveInfo()
+    local w, mx = nil, nil
+    for _, getter in ipairs({
+        function()
+            return player.PlayerGui.GameGuiNoInset.Screen.Top.GameInfo.Content.Waves.Title.Text
+        end,
+        function()
+            return player.PlayerGui.GameGui.Screen.Top.GameInfo.Content.Waves.Title.Text
+        end,
+    }) do
+        local ok, t = pcall(getter)
+        if ok and t then
+            local a, b = tostring(t):match("(%d+)%s*/%s*(%d+)")
+            if a then
+                w, mx = tonumber(a), tonumber(b)
+                break
+            end
+            local c = tostring(t):match("[Ww]ave%s*(%d+)")
+            if c then
+                w = tonumber(c)
+                break
+            end
+        end
+    end
     if w and w > 0 then
         lastWaveRead = w
     end
-    return lastWaveRead
+    if mx and mx > 0 then
+        lastMaxRead = mx
+    end
+    return lastWaveRead, lastMaxRead
 end
 
 local function parseAmount(text)
@@ -112,11 +235,45 @@ local function getCash()
 end
 
 local function entitiesFolder()
+    local mapE = nil
+    pcall(function()
+        mapE = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Entities")
+    end)
+    if mapE and hasObjects(mapE) then
+        return mapE
+    end
+    local ce = nil
+    pcall(function()
+        local cur = currentContext()
+        ce = cur and cur:FindFirstChild("Entities")
+    end)
+    if ce and (not mapE or hasObjects(ce)) then
+        return ce
+    end
+    if mapE then
+        return mapE
+    end
     local f = nil
     pcall(function()
-        f = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Entities")
+        f = workspace:FindFirstChild("Entities")
     end)
     return f
+end
+
+local function enemyCount()
+    local n = 0
+    local folder = entitiesFolder()
+    if not folder then
+        return 0
+    end
+    pcall(function()
+        for _, c in ipairs(folder:GetChildren()) do
+            if tostring(c.Name):sub(1, 6) == "enemy_" then
+                n = n + 1
+            end
+        end
+    end)
+    return n
 end
 
 local function pivotOf(obj)
@@ -210,9 +367,9 @@ local function fmtNumber(n)
         return "0"
     end
     if n == math.floor(n) and math.abs(n) < 9e15 then
-        return string.format("%d", n)
+        return string.format("%.0f", n)
     end
-    local s = string.format("%.4f", n)
+    local s = string.format("%.3f", n)
     s = s:gsub("0+$", ""):gsub("%.$", "")
     return s
 end
@@ -221,8 +378,7 @@ local function isIdent(k)
     return type(k) == "string" and k:match("^[%a_][%w_]*$") ~= nil
 end
 
-local function writeLua(v, indent)
-    indent = indent or ""
+local function writeLuaInline(v)
     local t = type(v)
     if t == "string" then
         return string.format("%q", v)
@@ -233,64 +389,78 @@ local function writeLua(v, indent)
     elseif t ~= "table" then
         return "nil"
     end
-    local n = 0
-    for k in pairs(v) do
-        n = n + 1
-    end
-    if n == 0 then
-        return "{}"
-    end
-    local inner = indent .. "    "
     local parts = {}
     local arrLen = #v
-    local simple = true
     for i = 1, arrLen do
-        if type(v[i]) == "table" then
-            simple = false
-        end
+        parts[#parts + 1] = writeLuaInline(v[i])
     end
     local keys = {}
     for k in pairs(v) do
         if not (type(k) == "number" and k >= 1 and k <= arrLen and k == math.floor(k)) then
             keys[#keys + 1] = k
-            if type(v[k]) == "table" then
-                simple = false
-            end
         end
     end
     table.sort(keys, function(a, b)
         return tostring(a) < tostring(b)
     end)
+    for _, k in ipairs(keys) do
+        local ks = isIdent(k) and k or ("[" .. (type(k) == "number" and fmtNumber(k) or string.format("%q", tostring(k))) .. "]")
+        parts[#parts + 1] = ks .. " = " .. writeLuaInline(v[k])
+    end
+    return "{" .. table.concat(parts, ", ") .. "}"
+end
+
+local function writeLua(v, indent)
+    indent = indent or ""
+    if type(v) ~= "table" then
+        return writeLuaInline(v)
+    end
+    local inline = writeLuaInline(v)
+    if #inline <= 200 then
+        return inline
+    end
+    local inner = indent .. "    "
+    local parts = {}
+    local arrLen = #v
     for i = 1, arrLen do
         parts[#parts + 1] = writeLua(v[i], inner)
     end
+    local keys = {}
+    for k in pairs(v) do
+        if not (type(k) == "number" and k >= 1 and k <= arrLen and k == math.floor(k)) then
+            keys[#keys + 1] = k
+        end
+    end
+    table.sort(keys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
     for _, k in ipairs(keys) do
         local ks = isIdent(k) and k or ("[" .. (type(k) == "number" and fmtNumber(k) or string.format("%q", tostring(k))) .. "]")
         parts[#parts + 1] = ks .. " = " .. writeLua(v[k], inner)
-    end
-    if simple and #parts <= 8 then
-        return "{" .. table.concat(parts, ", ") .. "}"
     end
     return "{\n" .. inner .. table.concat(parts, ",\n" .. inner) .. ",\n" .. indent .. "}"
 end
 
 local recorder = {
     active = false,
-    actions = {},
+    events = {},
     skips = {},
-    speeds = {},
+    skipRemote = nil,
     difficulty = nil,
+    place = nil,
+    remotes = {},
     units = {},
     pending = 0,
     startedAt = 0,
     waveStartAt = 0,
     lastWave = 0,
+    maxWave = 0,
     skipSince = nil,
     voteSince = nil,
-    recSpeed = true,
-    recSkip = true,
-    spam = {},
-    status = "Idle",
+    claimed = {},
+    finalSeen = false,
+    zeroSince = nil,
+    status = "Chưa ghi",
 }
 
 local function idLike(key)
@@ -349,6 +519,13 @@ local function serialize(v, depth, matchUnits)
     elseif t == "EnumItem" then
         return {__t = "enum", v = tostring(v)}
     elseif t == "Instance" then
+        local isCtx = false
+        pcall(function()
+            isCtx = v.Parent ~= nil and v.Parent.Name == "Contexts" and v.Parent.Parent == workspace
+        end)
+        if isCtx then
+            return {__t = "ctx"}
+        end
         local path = "?"
         pcall(function()
             path = v:GetFullName()
@@ -427,6 +604,8 @@ local function deserialize(v, refs, missing)
         return e
     elseif tag == "inst" then
         return resolvePath(v.path)
+    elseif tag == "ctx" then
+        return currentContext()
     elseif tag == "unit" then
         local r = refs[v.ref]
         if not r then
@@ -498,178 +677,198 @@ local function firstScalar(res)
     return nil
 end
 
-local function waitNewUnit(name, pos, before, timeout)
+local function waitNewUnit(name, pos, before, timeout, claimed)
+    claimed = claimed or {}
     local t0 = clockNow()
-    while clockNow() - t0 < (timeout or 2) do
+    while clockNow() - t0 < (timeout or 1.2) do
+        local best, bestD = nil, math.huge
         for _, m in ipairs(unitModels(name)) do
-            if not before[m] then
+            if not before[m] and not claimed[m] then
                 local p = pivotOf(m)
-                if p and pos and xz(p, pos) <= 4 then
-                    return m
+                if p and pos then
+                    local d = xz(p, pos)
+                    if d <= 2 and d < bestD then
+                        best, bestD = m, d
+                    end
+                elseif not pos then
+                    best = m
                 end
             end
         end
-        task.wait(0.05)
-    end
-    for _, m in ipairs(unitModels(name)) do
-        if not before[m] then
-            return m
+        if best then
+            claimed[best] = true
+            return best
         end
+        task.wait(0.05)
     end
     return nil
 end
 
+local function remoteRejected(res)
+    return type(res) == "table" and (res.n or #res) >= 1 and res[1] == false
+end
+
 local function classify(name, args)
     local l = string.lower(tostring(name))
-    for _, w in ipairs(IGNORE_WORDS) do
-        if l:find(w, 1, true) then
-            return "Ignore"
-        end
-    end
     if l:find("difficulty", 1, true) then
         return "Difficulty"
     end
-    if l:find("skip", 1, true) and not l:find("auto", 1, true) then
+    if l:find("skip", 1, true) then
+        if l:find("auto", 1, true) then
+            return nil
+        end
         return "Skip"
-    end
-    if l:find("speed", 1, true) or l:find("tick", 1, true) then
-        return "Speed"
-    end
-    if l:find("place", 1, true) and type(args[1]) == "string" and args[1]:sub(1, 5) == "unit_" then
-        return "Place"
     end
     if l:find("upgradeall", 1, true) then
         return "UpgradeAll"
     end
-    if l:find("sellall", 1, true) then
-        return "SellAll"
-    end
-    if l:find("upgrade", 1, true) then
-        return "Upgrade"
-    end
-    if l:find("sell", 1, true) or l:find("delete", 1, true) or l:find("remove", 1, true) then
-        return "Sell"
+    if l:find("place", 1, true) then
+        for i = 1, (args.n or #args) do
+            if type(args[i]) == "string" and args[i]:sub(1, 5) == "unit_" then
+                return "Place"
+            end
+        end
+        return nil
     end
     if l:find("ability", 1, true) then
         return "Ability"
     end
-    return "Remote"
+    return nil
 end
+
+local TYPE_VI = {Place = "Đặt", UpgradeAll = "Nâng cấp tất cả", Ability = "Kỹ năng"}
 
 local function round2(x)
     return math.floor((tonumber(x) or 0) * 100 + 0.5) / 100
 end
 
+local function placeArgInfo(args)
+    local uIdx, dIdx = nil, nil
+    for i = 1, (args.n or #args) do
+        if not uIdx and type(args[i]) == "string" and args[i]:sub(1, 5) == "unit_" then
+            uIdx = i
+        elseif not dIdx and type(args[i]) == "table" then
+            dIdx = i
+        end
+    end
+    return uIdx, dIdx
+end
+
 local function processRemote(remote, method, args, res, pre)
     local name = tostring(remote.Name)
     local kind = classify(name, args)
-    if kind == "Ignore" then
+    if not kind then
         return
     end
     local t = pre.t
-    local sp = recorder.spam[name]
-    if not sp or t - sp.t > 2 then
-        sp = {t = t, n = 0}
-        recorder.spam[name] = sp
-    end
-    sp.n = sp.n + 1
-    if sp.n > 8 and kind == "Remote" then
-        return
-    end
     local wave = pre.wave
     if kind == "Difficulty" then
+        if remoteRejected(res) then
+            return
+        end
         recorder.difficulty = {
             Remote = name,
             Method = method,
             Args = serializeArgs(args, false),
             Delay = round2(pre.voteSince and (t - pre.voteSince) or 0),
         }
-        recorder.status = "Recorded difficulty " .. tostring(args[1])
+        recorder.status = "Đã ghi vote độ khó"
         return
     end
     if kind == "Skip" then
-        if recorder.recSkip then
-            recorder.skips[#recorder.skips + 1] = {
-                Wave = wave,
-                Delay = round2(pre.skipSince and (t - pre.skipSince) or 0),
-                Remote = name,
-                Method = method,
-                Args = serializeArgs(args, false),
-            }
-            recorder.status = string.format("Wave %d | Skip after %.1fs", wave, pre.skipSince and (t - pre.skipSince) or 0)
+        if recorder.skips[wave] == nil then
+            recorder.skips[wave] = round2(pre.skipSince and (t - pre.skipSince) or 0)
+            recorder.skipRemote = recorder.skipRemote or {Remote = name, Method = method, Args = serializeArgs(args, false)}
+            recorder.status = string.format("Wave %d | Skip sau %.1f giây", wave, recorder.skips[wave])
         end
         return
     end
-    if kind == "Speed" then
-        if recorder.recSpeed then
-            recorder.speeds[#recorder.speeds + 1] = {
-                Wave = wave,
-                Delay = round2(t - pre.waveStartAt),
-                Remote = name,
-                Method = method,
-                Args = serializeArgs(args, false),
-            }
-            recorder.status = string.format("Wave %d | Speed %s", wave, tostring(args[1]))
-        end
-        return
-    end
-    local action = {
-        Wave = wave,
-        Type = kind,
-        Remote = name,
-        Method = method,
-        Time = round2(t - recorder.startedAt),
-    }
-    local index = #recorder.actions + 1
-    recorder.actions[index] = action
+    local ev = {Wave = wave, Delay = round2(t - (pre.waveStartAt or t)), Type = kind}
+    recorder.events[#recorder.events + 1] = ev
     recorder.pending = recorder.pending + 1
     task.spawn(function()
         pcall(function()
             if kind == "Place" then
-                local unitName = args[1]
+                local uIdx, dIdx = placeArgInfo(args)
+                local unitName = uIdx and args[uIdx] or nil
+                local data = dIdx and args[dIdx] or nil
                 local pos = nil
-                if type(args[2]) == "table" then
-                    pos = args[2].Position or (args[2].CF and args[2].CF.Position)
+                if type(data) == "table" then
+                    pos = data.Position or (data.CF and data.CF.Position)
                 end
-                local model = waitNewUnit(unitName, pos, pre.before or {}, 2)
+                local model = nil
+                if unitName and not remoteRejected(res) then
+                    model = waitNewUnit(unitName, pos, pre.before or {}, 1.5, recorder.claimed)
+                end
                 if not model then
-                    action.Failed = true
+                    ev.Failed = true
                 else
                     local ref = #recorder.units + 1
                     recorder.units[ref] = {ref = ref, name = unitName, model = model, ret = firstScalar(res), attrs = modelAttrs(model)}
-                    action.Ref = ref
-                    action.Unit = unitName
-                    if pos then
-                        action.Pos = {round2(pos.X), round2(pos.Y), round2(pos.Z)}
+                    ev.Ref = ref
+                    ev.Unit = unitName
+                    local mp = pos or pivotOf(model)
+                    if mp then
+                        ev.Pos = {round2(mp.X), round2(mp.Y), round2(mp.Z)}
                     end
-                    action.Args = serializeArgs(args, false)
+                    if not recorder.place and type(data) == "table" then
+                        local tpl = {}
+                        for k, v in pairs(data) do
+                            if k ~= "Position" and k ~= "CF" and k ~= "Attempt" and type(v) ~= "table" and typeof(v) ~= "Vector3" and typeof(v) ~= "CFrame" then
+                                tpl[k] = v
+                            end
+                        end
+                        local rot = nil
+                        if typeof(data.CF) == "CFrame" then
+                            local c = {data.CF:GetComponents()}
+                            rot = {}
+                            for i = 4, 12 do
+                                rot[#rot + 1] = math.floor((tonumber(c[i]) or 0) * 10000 + 0.5) / 10000
+                            end
+                        end
+                        local sargs = serializeArgs(args, false)
+                        sargs[uIdx] = "unit"
+                        sargs[dIdx] = {__t = "nil"}
+                        recorder.place = {Remote = name, Method = method, Args = sargs, UnitIndex = uIdx, DataIndex = dIdx, Template = tpl, Rot = rot}
+                    end
                 end
-            else
-                action.Args = serializeArgs(args, true)
+            elseif kind == "UpgradeAll" then
+                if remoteRejected(res) then
+                    ev.Failed = true
+                end
+                recorder.remotes.UpgradeAll = recorder.remotes.UpgradeAll or {Remote = name, Method = method, Args = serializeArgs(args, false)}
+            elseif kind == "Ability" then
+                if remoteRejected(res) then
+                    ev.Failed = true
+                end
+                ev.Remote = name
+                ev.Method = method
+                ev.Args = serializeArgs(args, true)
                 for i = 1, (args.n or #args) do
                     local r = unitRefFor(args[i])
                     if r then
-                        action.Ref = r.ref
+                        ev.Ref = r.ref
                         break
                     end
                 end
             end
-            task.wait(0.5)
-            local spent = (pre.cash or 0) - getCash()
-            if spent > 0 and (kind == "Place" or kind == "Upgrade" or kind == "UpgradeAll" or kind == "Ability" or kind == "Remote") then
-                action.Cost = math.floor(spent)
-            else
-                action.Cost = 0
-            end
-            if action.Ref and kind == "Sell" then
-                local u = recorder.units[action.Ref]
-                if u then
-                    u.sold = true
+            local spent = (pre.cash or 0) - (pre.cashAfter or pre.cash or 0)
+            if spent <= 0 and kind ~= "Ability" then
+                local minCash = getCash()
+                local tc = clockNow()
+                while clockNow() - tc < 0.4 do
+                    local c = getCash()
+                    if c < minCash then
+                        minCash = c
+                    end
+                    task.wait(0.05)
                 end
+                spent = (pre.cash or 0) - minCash
             end
+            ev.Cost = spent > 0 and math.floor(spent) or 0
         end)
         recorder.pending = recorder.pending - 1
-        recorder.status = string.format("Wave %d | %s %s (%d actions)", wave, kind, action.Unit or "", #recorder.actions)
+        recorder.status = string.format("Wave %d | %s %s", wave, TYPE_VI[kind] or kind, ev.Unit or "")
     end)
 end
 
@@ -697,45 +896,93 @@ G.NxsMacroHandler = function(phase, self, method, args, res, pre)
     return nil
 end
 
-local hookReady = false
-if G.NxsMacroHooked then
-    hookReady = true
-elseif hookmetamethod and getnamecallmethod then
+G.NxsNC = G.NxsNC or setmetatable({}, {__mode = "k"})
+local hookWrap = newcclosure or function(f)
+    return f
+end
+
+local function recordCall(old, self, method, ...)
+    local h = G.NxsMacroHandler
+    if not h then
+        return old(self, ...)
+    end
+    local args = table.pack(...)
+    local okPre, pre = pcall(h, "pre", self, method, args)
+    if not okPre then
+        pre = nil
+    end
+    local res = table.pack(old(self, ...))
+    if type(pre) == "table" then
+        pcall(function()
+            pre.cashAfter = getCash()
+        end)
+    end
+    pcall(h, "post", self, method, args, res, pre)
+    return table.unpack(res, 1, res.n)
+end
+
+if not G.NxsMacroHooked and hookmetamethod and getnamecallmethod then
     local okHook = pcall(function()
-        local wrap = newcclosure or function(f)
-            return f
-        end
         local old
-        old = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+        old = hookmetamethod(game, "__namecall", hookWrap(function(self, ...)
             local method = getnamecallmethod()
             if (method == "InvokeServer" or method == "FireServer") and G.NxsMacroActive and not (checkcaller and checkcaller()) then
-                local h = G.NxsMacroHandler
-                if h then
-                    local args = table.pack(...)
-                    local okPre, pre = pcall(h, "pre", self, method, args)
-                    if not okPre then
-                        pre = nil
-                    end
-                    local res = table.pack(old(self, ...))
-                    pcall(h, "post", self, method, args, res, pre)
-                    return table.unpack(res, 1, res.n)
+                local th = coroutine.running()
+                G.NxsNC[th] = (G.NxsNC[th] or 0) + 1
+                local res = table.pack(pcall(recordCall, old, self, method, ...))
+                G.NxsNC[th] = (G.NxsNC[th] or 1) - 1
+                if res[1] then
+                    return table.unpack(res, 2, res.n)
                 end
+                error(res[2], 0)
             end
             return old(self, ...)
         end))
     end)
     if okHook then
         G.NxsMacroHooked = true
-        hookReady = true
     end
 end
+
+if not G.NxsMacroFnHooked and hookfunction then
+    local okFn = pcall(function()
+        local rf = Instance.new("RemoteFunction")
+        local re = Instance.new("RemoteEvent")
+        local function install(fn, method)
+            local old
+            old = hookfunction(fn, hookWrap(function(self, ...)
+                if G.NxsMacroActive and not (checkcaller and checkcaller()) and (G.NxsNC[coroutine.running()] or 0) <= 0 then
+                    return recordCall(old, self, method, ...)
+                end
+                return old(self, ...)
+            end))
+        end
+        install(rf.InvokeServer, "InvokeServer")
+        install(re.FireServer, "FireServer")
+        pcall(function()
+            rf:Destroy()
+            re:Destroy()
+        end)
+    end)
+    if okFn then
+        G.NxsMacroFnHooked = true
+    end
+end
+
+local hookReady = G.NxsMacroHooked == true or G.NxsMacroFnHooked == true
+local hookInfo = (G.NxsMacroHooked and "namecall" or "") .. ((G.NxsMacroHooked and G.NxsMacroFnHooked) and " + " or "") .. (G.NxsMacroFnHooked and "function" or "")
+
+local autoStop = {fn = nil}
 
 task.spawn(function()
     local wasSkip, wasVote = false, false
     while true do
         if recorder.active then
             local now = clockNow()
-            local w = getWave()
+            local w, mx = getWaveInfo()
+            if mx and mx > 0 then
+                recorder.maxWave = mx
+            end
             if w ~= recorder.lastWave then
                 recorder.lastWave = w
                 recorder.waveStartAt = now
@@ -754,6 +1001,24 @@ task.spawn(function()
                 recorder.voteSince = nil
             end
             wasVote = v
+            local stopNow = false
+            if mx and mx > 0 and w >= mx then
+                if enemyCount() > 0 then
+                    recorder.finalSeen = true
+                    recorder.zeroSince = nil
+                elseif recorder.finalSeen then
+                    recorder.zeroSince = recorder.zeroSince or now
+                    if now - recorder.zeroSince >= 3 then
+                        stopNow = true
+                    end
+                end
+            end
+            if isShown(PATH_GAMEEND) and now - recorder.startedAt > 5 then
+                stopNow = true
+            end
+            if stopNow and autoStop.fn then
+                pcall(autoStop.fn)
+            end
         end
         task.wait(0.05)
     end
@@ -805,42 +1070,85 @@ local function timestamp()
     return tostring(math.floor(os.time()))
 end
 
-local function buildConfig(name)
-    local actions = {}
-    for _, a in ipairs(recorder.actions) do
-        if not a.Failed and a.Args then
-            actions[#actions + 1] = a
+local function median(list)
+    if not list or #list == 0 then
+        return nil
+    end
+    table.sort(list)
+    return list[math.ceil(#list / 2)]
+end
+
+local function compileConfig(name)
+    local events, priceList = {}, {}
+    local unitCount = 0
+    for _, ev in ipairs(recorder.events) do
+        if not ev.Failed then
+            if ev.Type == "Place" and ev.Ref and ev.Pos then
+                events[#events + 1] = {Wave = ev.Wave, Delay = ev.Delay, Type = "Place", Ref = ev.Ref, Unit = ev.Unit, Pos = ev.Pos, Cost = ev.Cost}
+                unitCount = unitCount + 1
+                if (ev.Cost or 0) > 0 then
+                    priceList[ev.Unit] = priceList[ev.Unit] or {}
+                    table.insert(priceList[ev.Unit], ev.Cost)
+                end
+            elseif ev.Type == "UpgradeAll" then
+                events[#events + 1] = {Wave = ev.Wave, Delay = ev.Delay, Type = "UpgradeAll", Cost = ev.Cost}
+            elseif ev.Type == "Ability" and ev.Args then
+                events[#events + 1] = {Wave = ev.Wave, Delay = ev.Delay, Type = "Ability", Ref = ev.Ref, Remote = ev.Remote, Method = ev.Method, Args = ev.Args}
+            end
         end
     end
-    local refMap = {}
-    for _, a in ipairs(actions) do
-        if a.Type == "Place" and a.Ref then
-            refMap[a.Ref] = true
-        end
+    local price = {}
+    for n, list in pairs(priceList) do
+        price[n] = median(list)
     end
-    local waveTotal = nil
-    pcall(function()
-        local t = player.PlayerGui.GameGuiNoInset.Screen.Top.GameInfo.Content.Waves.Title.Text
-        waveTotal = tonumber(tostring(t):match("%d+%s*/%s*(%d+)"))
+    local skips = {}
+    for w, d in pairs(recorder.skips) do
+        skips[#skips + 1] = {Wave = w, Delay = d}
+    end
+    table.sort(skips, function(a, b)
+        return a.Wave < b.Wave
     end)
     return {
         Name = name,
         Type = "NxsMacro",
-        Version = 1,
+        Version = 3,
         PlaceId = game.PlaceId,
         CreatedAt = timestamp(),
-        WaveTotal = waveTotal,
         LastWave = recorder.lastWave,
-        Units = #recorder.units,
+        MaxWave = recorder.maxWave,
+        UnitCount = unitCount,
         Difficulty = recorder.difficulty,
-        Speed = recorder.speeds,
-        Skips = recorder.skips,
-        Actions = actions,
+        SkipRemote = recorder.skipRemote,
+        Skips = skips,
+        Place = recorder.place,
+        Remotes = recorder.remotes,
+        Price = price,
+        Events = events,
     }
 end
 
 local function configToText(cfg)
-    return "return " .. writeLua(cfg, "") .. "\n"
+    local out = {"return {"}
+    local function line(indent, text)
+        out[#out + 1] = string.rep("    ", indent) .. text
+    end
+    for _, k in ipairs({"Name", "Type", "Version", "PlaceId", "CreatedAt", "LastWave", "MaxWave", "UnitCount", "Difficulty", "SkipRemote", "Place", "Remotes", "Price"}) do
+        if cfg[k] ~= nil then
+            line(1, k .. " = " .. writeLuaInline(cfg[k]) .. ",")
+        end
+    end
+    line(1, "Skips = {")
+    for _, sk in ipairs(cfg.Skips or {}) do
+        line(2, writeLuaInline(sk) .. ",")
+    end
+    line(1, "},")
+    line(1, "Events = {")
+    for _, ev in ipairs(cfg.Events or {}) do
+        line(2, writeLuaInline(ev) .. ",")
+    end
+    line(1, "},")
+    out[#out + 1] = "}"
+    return table.concat(out, "\n") .. "\n"
 end
 
 local function loadConfigText(text)
@@ -873,9 +1181,9 @@ local function saveMacro(cfg)
         name = cfg.Name,
         file = fileName,
         created = cfg.CreatedAt,
-        actions = #cfg.Actions,
-        skips = #cfg.Skips,
-        speeds = #cfg.Speed,
+        units = cfg.UnitCount,
+        events = #(cfg.Events or {}),
+        skips = #(cfg.Skips or {}),
         lastWave = cfg.LastWave,
         place = cfg.PlaceId,
     })
@@ -932,7 +1240,43 @@ local function guiParent()
     return p or player.PlayerGui
 end
 
-local function showConfigPanel(title, text)
+local function copyText(text)
+    local ok = pcall(function()
+        if setclipboard then
+            setclipboard(text)
+        elseif toclipboard then
+            toclipboard(text)
+        elseif Clipboard and Clipboard.set then
+            Clipboard.set(text)
+        else
+            error("no clipboard")
+        end
+    end)
+    return ok
+end
+
+local function splitChunks(text, maxLines, maxChars)
+    local chunks = {}
+    local cur, lines, chars = {}, 0, 0
+    for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
+        if #line > maxChars then
+            line = line:sub(1, maxChars) .. " ..."
+        end
+        if lines >= maxLines or chars + #line > maxChars then
+            chunks[#chunks + 1] = table.concat(cur, "\n")
+            cur, lines, chars = {}, 0, 0
+        end
+        cur[#cur + 1] = line
+        lines = lines + 1
+        chars = chars + #line + 1
+    end
+    if #cur > 0 then
+        chunks[#chunks + 1] = table.concat(cur, "\n")
+    end
+    return chunks
+end
+
+local function showConfigPanel(title, text, summary)
     pcall(function()
         if panelGui then
             panelGui:Destroy()
@@ -942,6 +1286,7 @@ local function showConfigPanel(title, text)
     sg.Name = "NxsMacroConfig"
     sg.ResetOnSpawn = false
     sg.DisplayOrder = 10001
+    sg.IgnoreGuiInset = true
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     sg.Parent = guiParent()
     panelGui = sg
@@ -949,11 +1294,10 @@ local function showConfigPanel(title, text)
     local frame = Instance.new("Frame")
     frame.AnchorPoint = Vector2.new(0.5, 0.5)
     frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-    frame.Size = UDim2.new(0.72, 0, 0.78, 0)
+    frame.Size = UDim2.new(0.8, 0, 0.8, 0)
     frame.BackgroundColor3 = Color3.fromRGB(18, 10, 36)
     frame.BorderSizePixel = 0
     frame.Active = true
-    frame.Draggable = true
     frame.Parent = sg
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 10)
@@ -963,13 +1307,48 @@ local function showConfigPanel(title, text)
     stroke.Transparency = 0.5
     stroke.Parent = frame
     local limit = Instance.new("UISizeConstraint")
-    limit.MaxSize = Vector2.new(760, 520)
+    limit.MaxSize = Vector2.new(820, 560)
     limit.Parent = frame
+
+    local function makeBtn(label, xScale, color)
+        local b = Instance.new("TextButton")
+        b.AnchorPoint = Vector2.new(0, 1)
+        b.Position = UDim2.new(xScale, 10, 1, -8)
+        b.Size = UDim2.new(0.5, -15, 0, 38)
+        b.BackgroundColor3 = color
+        b.BorderSizePixel = 0
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 16
+        b.TextColor3 = Color3.fromRGB(255, 255, 255)
+        b.Text = label
+        b.ZIndex = 5
+        b.Parent = frame
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 8)
+        c.Parent = b
+        return b
+    end
+    local copyBtn = makeBtn("Sao chép", 0, Color3.fromRGB(124, 58, 237))
+    local closeBtn = makeBtn("Đóng", 0.5, Color3.fromRGB(70, 40, 110))
+    copyBtn.Activated:Connect(function()
+        local ok = copyText(text)
+        copyBtn.Text = ok and "Đã sao chép!" or "Executor không hỗ trợ sao chép"
+        task.delay(1.8, function()
+            pcall(function()
+                copyBtn.Text = "Sao chép"
+            end)
+        end)
+    end)
+    closeBtn.Activated:Connect(function()
+        pcall(function()
+            sg:Destroy()
+        end)
+    end)
 
     local head = Instance.new("TextLabel")
     head.BackgroundTransparency = 1
     head.Position = UDim2.new(0, 12, 0, 6)
-    head.Size = UDim2.new(1, -24, 0, 26)
+    head.Size = UDim2.new(1, -24, 0, 22)
     head.Font = Enum.Font.GothamBold
     head.TextSize = 15
     head.TextColor3 = Color3.fromRGB(240, 232, 255)
@@ -978,104 +1357,138 @@ local function showConfigPanel(title, text)
     head.Text = title
     head.Parent = frame
 
+    local sub = Instance.new("TextLabel")
+    sub.BackgroundTransparency = 1
+    sub.Position = UDim2.new(0, 12, 0, 28)
+    sub.Size = UDim2.new(1, -24, 0, 18)
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 13
+    sub.TextColor3 = Color3.fromRGB(200, 185, 255)
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+    sub.TextTruncate = Enum.TextTruncate.AtEnd
+    sub.Text = summary or ""
+    sub.Parent = frame
+
     local scroll = Instance.new("ScrollingFrame")
-    scroll.Position = UDim2.new(0, 10, 0, 36)
-    scroll.Size = UDim2.new(1, -20, 1, -86)
+    scroll.Position = UDim2.new(0, 10, 0, 50)
+    scroll.Size = UDim2.new(1, -20, 1, -106)
     scroll.BackgroundColor3 = Color3.fromRGB(8, 4, 18)
     scroll.BorderSizePixel = 0
-    scroll.ScrollBarThickness = 5
-    scroll.AutomaticCanvasSize = Enum.AutomaticSize.XY
+    scroll.ScrollBarThickness = 6
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     scroll.Parent = frame
     local sc = Instance.new("UICorner")
     sc.CornerRadius = UDim.new(0, 8)
     sc.Parent = scroll
+    local layout = Instance.new("UIListLayout")
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scroll
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 6)
+    pad.PaddingRight = UDim.new(0, 6)
+    pad.PaddingTop = UDim.new(0, 6)
+    pad.PaddingBottom = UDim.new(0, 6)
+    pad.Parent = scroll
 
-    local box = Instance.new("TextBox")
-    box.BackgroundTransparency = 1
-    box.Position = UDim2.new(0, 6, 0, 6)
-    box.Size = UDim2.new(1, -12, 0, 0)
-    box.AutomaticSize = Enum.AutomaticSize.XY
-    box.ClearTextOnFocus = false
-    box.MultiLine = true
-    box.TextEditable = true
-    box.Font = Enum.Font.Code
-    box.TextSize = 13
-    box.TextColor3 = Color3.fromRGB(225, 215, 255)
-    box.TextXAlignment = Enum.TextXAlignment.Left
-    box.TextYAlignment = Enum.TextYAlignment.Top
-    box.Text = text
-    box.Parent = scroll
-
-    local function makeBtn(label, xScale, color, fn)
-        local b = Instance.new("TextButton")
-        b.AnchorPoint = Vector2.new(0, 1)
-        b.Position = UDim2.new(xScale, 10, 1, -8)
-        b.Size = UDim2.new(0.5, -15, 0, 36)
-        b.BackgroundColor3 = color
-        b.BorderSizePixel = 0
-        b.Font = Enum.Font.GothamBold
-        b.TextSize = 15
-        b.TextColor3 = Color3.fromRGB(255, 255, 255)
-        b.Text = label
-        b.Parent = frame
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = b
-        b.Activated:Connect(fn)
-        return b
-    end
-    local copyBtn
-    copyBtn = makeBtn("Copy", 0, Color3.fromRGB(124, 58, 237), function()
-        local ok = pcall(function()
-            if setclipboard then
-                setclipboard(text)
-            elseif toclipboard then
-                toclipboard(text)
-            else
-                error("no clipboard")
+    task.spawn(function()
+        local chunks = splitChunks(text, 60, 5000)
+        local maxChunks = 60
+        for idx, chunk in ipairs(chunks) do
+            if idx > maxChunks then
+                local more = Instance.new("TextLabel")
+                more.BackgroundTransparency = 1
+                more.Size = UDim2.new(1, 0, 0, 24)
+                more.Font = Enum.Font.GothamBold
+                more.TextSize = 13
+                more.TextColor3 = Color3.fromRGB(255, 200, 120)
+                more.TextXAlignment = Enum.TextXAlignment.Left
+                more.Text = "... Config dài, chỉ hiện một phần. Nút Sao chép vẫn copy đủ."
+                more.LayoutOrder = idx
+                more.Parent = scroll
+                break
             end
-        end)
-        copyBtn.Text = ok and "Copied!" or "Copy failed - select text manually"
-        task.delay(1.5, function()
             pcall(function()
-                copyBtn.Text = "Copy"
+                local lbl = Instance.new("TextLabel")
+                lbl.BackgroundTransparency = 1
+                lbl.Size = UDim2.new(1, 0, 0, 0)
+                lbl.AutomaticSize = Enum.AutomaticSize.Y
+                lbl.Font = Enum.Font.Code
+                lbl.TextSize = 12
+                lbl.TextWrapped = true
+                lbl.TextColor3 = Color3.fromRGB(225, 215, 255)
+                lbl.TextXAlignment = Enum.TextXAlignment.Left
+                lbl.TextYAlignment = Enum.TextYAlignment.Top
+                lbl.LayoutOrder = idx
+                lbl.Text = chunk
+                lbl.Parent = scroll
             end)
-        end)
-    end)
-    makeBtn("Close", 0.5, Color3.fromRGB(70, 40, 110), function()
-        pcall(function()
-            sg:Destroy()
-        end)
+            if idx % 10 == 0 then
+                task.wait()
+            end
+        end
     end)
 end
 
+local function configSummary(cfg)
+    if type(cfg) ~= "table" then
+        return ""
+    end
+    if cfg.Version ~= 3 then
+        return "Macro bản cũ, hãy ghi lại bằng bản mới"
+    end
+    local up, ab = 0, 0
+    for _, ev in ipairs(cfg.Events or {}) do
+        if ev.Type == "UpgradeAll" then
+            up = up + 1
+        elseif ev.Type == "Ability" then
+            ab = ab + 1
+        end
+    end
+    local dif = "chưa có"
+    pcall(function()
+        for _, a in ipairs(cfg.Difficulty.Args) do
+            if type(a) == "string" and a:sub(1, 4) == "dif_" then
+                dif = a
+            end
+        end
+    end)
+    return string.format("Độ khó: %s | %d unit | %d Upgrade All | %d kỹ năng | skip %d wave | tới wave %s/%s", dif, tonumber(cfg.UnitCount) or 0, up, ab, #(cfg.Skips or {}), tostring(cfg.LastWave or "?"), tostring(cfg.MaxWave or "?"))
+end
+
+local macroNameInput = ""
+local recordToggleRef = {t = nil}
+
 local function startRecording()
     if not hookReady then
-        recorder.status = "Executor does not support hookmetamethod"
+        recorder.status = "Executor không hỗ trợ hook, không ghi được"
         return false
     end
-    recorder.actions = {}
+    recorder.events = {}
     recorder.skips = {}
-    recorder.speeds = {}
+    recorder.skipRemote = nil
     recorder.difficulty = nil
+    recorder.place = nil
+    recorder.remotes = {}
     recorder.units = {}
     recorder.pending = 0
-    recorder.spam = {}
+    recorder.claimed = {}
+    recorder.finalSeen = false
+    recorder.zeroSince = nil
     recorder.startedAt = clockNow()
-    recorder.lastWave = getWave()
+    local w, mx = getWaveInfo()
+    recorder.lastWave = w
+    recorder.maxWave = mx or 0
     recorder.waveStartAt = clockNow()
     recorder.skipSince = isShown(PATH_SKIP) and clockNow() or nil
     recorder.voteSince = isShown(PATH_VOTE) and clockNow() or nil
     recorder.active = true
     G.NxsMacroActive = true
-    recorder.status = "Recording..."
+    recorder.status = "Đang ghi... | Hook: " .. hookInfo
     return true
 end
 
-local macroNameInput = ""
-
-local function stopRecording()
+local function stopRecording(auto)
     if not recorder.active then
         return
     end
@@ -1086,28 +1499,114 @@ local function stopRecording()
         task.wait(0.1)
     end
     local name = macroNameInput ~= "" and macroNameInput or ("Macro " .. timestamp())
-    local cfg = buildConfig(name)
+    local cfg = compileConfig(name)
     local text, path = saveMacro(cfg)
-    recorder.status = string.format("Saved %s (%d actions, %d skips, %d speed)", path, #cfg.Actions, #cfg.Skips, #cfg.Speed)
-    showConfigPanel(name .. "  |  " .. path, text)
+    recorder.status = (auto and "Hết trận, tự dừng ghi. " or "") .. "Đã lưu " .. path .. "\n" .. configSummary(cfg)
+    pcall(showConfigPanel, name .. "  |  " .. path, text, configSummary(cfg))
+end
+
+autoStop.fn = function()
+    if not recorder.active then
+        return
+    end
+    task.spawn(stopRecording, true)
+    local tg = recordToggleRef.t
+    if tg then
+        task.spawn(function()
+            pcall(function()
+                tg:Set(false, true)
+            end)
+        end)
+    end
 end
 
 local playback = {
     playing = false,
     autoReplay = true,
-    skipAll = false,
-    status = "Idle",
+    keepSpeed = true,
+    status = "Chưa chạy",
     file = nil,
     runId = 0,
 }
 
+local PLACE_OFFSETS = {{0, 0}}
+do
+    for _, ring in ipairs({{1, 8}, {2, 8}, {3, 12}}) do
+        local r, n = ring[1], ring[2]
+        for k = 0, n - 1 do
+            local a = (k / n) * math.pi * 2
+            PLACE_OFFSETS[#PLACE_OFFSETS + 1] = {math.cos(a) * r, math.sin(a) * r}
+        end
+    end
+end
+
+local function jitterPos(pos, mag)
+    local function axis()
+        if math.random(1, 2) == 1 then
+            return -mag
+        end
+        return mag
+    end
+    local mode = math.random(1, 3)
+    local dx, dz = 0, 0
+    if mode ~= 2 then
+        dx = axis()
+    end
+    if mode ~= 1 then
+        dz = axis()
+    end
+    return Vector3.new(pos.X + dx, pos.Y, pos.Z + dz)
+end
+
 local lastRestart = 0
 local function restartGame()
     if clockNow() - lastRestart < 8 then
-        return
+        return false
     end
     lastRestart = clockNow()
-    fireRemote("RestartGame", "InvokeServer", {n = 0}, 5)
+    local cur = contextMode() and currentContext() or nil
+    if cur then
+        fireRemote("RestartGame", "InvokeServer", {cur, false, n = 2}, 5)
+    else
+        fireRemote("RestartGame", "InvokeServer", {n = 0}, 5)
+    end
+    return true
+end
+
+local function speedSelected()
+    local st = nil
+    pcall(function()
+        local b = player.PlayerGui.GameGuiNoInset.Screen.Top.WaveControls.WaveControls.GameSpeed.Speeds:FindFirstChild("2")
+        if b then
+            local c = b.UIGradient.Color.Keypoints[1].Value
+            st = c.G > 0.8 and c.R < 0.6
+        end
+    end)
+    return st
+end
+
+local function buildPlaceArgs(cfg, ev, pos, attempt, refs)
+    local p = cfg.Place or {}
+    local args = deserializeArgs(p.Args or {n = 2}, refs)
+    local uIdx = tonumber(p.UnitIndex) or 1
+    local dIdx = tonumber(p.DataIndex) or 2
+    local data = {}
+    for k, v in pairs(p.Template or {Valid = true, Rotation = 180}) do
+        data[k] = v
+    end
+    data.Position = pos
+    data.Attempt = attempt
+    local r = p.Rot
+    if type(r) == "table" and #r == 9 then
+        data.CF = CFrame.new(pos.X, pos.Y, pos.Z, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9])
+    else
+        data.CF = CFrame.new(pos)
+    end
+    args[uIdx] = ev.Unit
+    args[dIdx] = data
+    local n = math.max(tonumber(args.n) or 0, uIdx, dIdx)
+    args.n = n
+    return args
 end
 
 local function playOnce(cfg, runId)
@@ -1115,165 +1614,220 @@ local function playOnce(cfg, runId)
         return playback.playing and playback.runId == runId
     end
     local refs = {}
+    local claimed = {}
     local gameOver = false
-    playback.status = "Waiting game start"
+    local restartedAt = playback.restartedAt
+    playback.restartedAt = nil
 
+    playback.status = "Đợi trận bắt đầu"
     local t0 = clockNow()
-    local voteSince = nil
-    while alive() and clockNow() - t0 < 15 do
-        if gameEndShown() then
+    while alive() do
+        if isShown(PATH_GAMEEND) then
             return "ended"
         end
         if isShown(PATH_VOTE) then
-            voteSince = voteSince or clockNow()
             local d = cfg.Difficulty
-            if d then
-                if clockNow() - voteSince >= (tonumber(d.Delay) or 0) then
-                    playback.status = "Vote difficulty"
-                    local args = deserializeArgs(d.Args or {n = 0}, refs)
-                    fireRemote(d.Remote, d.Method, args, 5)
-                    task.wait(0.5)
+            local since = clockNow()
+            local nextVote = since + (d and math.max(0, tonumber(d.Delay) or 0) or 0)
+            while alive() and isShown(PATH_VOTE) do
+                if d and clockNow() >= nextVote then
+                    nextVote = clockNow() + 3
+                    playback.status = "Vote độ khó"
+                    fireRemote(d.Remote, d.Method, deserializeArgs(d.Args or {n = 0}, refs), 5)
                 end
+                task.wait(0.2)
             end
-        elseif voteSince or getWave() >= 1 then
             break
         end
-        task.wait(0.1)
+        local waitLimit = restartedAt and 25 or 3
+        if clockNow() - t0 > waitLimit and getWaveInfo() >= 1 then
+            break
+        end
+        if clockNow() - t0 > 60 then
+            break
+        end
+        task.wait(0.2)
     end
     if not alive() then
         return "stopped"
     end
 
     local waveStart = {}
-    local curWave = getWave()
+    local curWave = getWaveInfo()
     waveStart[curWave] = clockNow()
-
     task.spawn(function()
         while alive() and not gameOver do
-            local w = getWave()
+            local w = getWaveInfo()
             if w ~= curWave then
                 curWave = w
                 waveStart[w] = clockNow()
             end
-            if gameEndShown() then
-                gameOver = true
+            if isShown(PATH_GAMEEND) then
+                task.wait(0.3)
+                if isShown(PATH_GAMEEND) then
+                    gameOver = true
+                end
             end
             task.wait(0.1)
         end
     end)
 
     task.spawn(function()
-        for _, sp in ipairs(cfg.Speed or {}) do
-            while alive() and not gameOver and curWave < (tonumber(sp.Wave) or 0) do
-                task.wait(0.2)
+        local lastSpeed, lastAuto = -100, -100
+        local sentBlind = false
+        while alive() and not gameOver do
+            if playback.keepSpeed then
+                local sel = speedSelected()
+                if sel == false and clockNow() - lastSpeed >= 5 then
+                    lastSpeed = clockNow()
+                    fireRemote("ChangeTickSpeed", "FireServer", {2, n = 1}, 3)
+                elseif sel == nil and not sentBlind then
+                    sentBlind = true
+                    fireRemote("ChangeTickSpeed", "FireServer", {2, n = 1}, 3)
+                end
             end
-            if not alive() or gameOver then
-                return
+            if autoSkipColorState() == true and clockNow() - lastAuto >= 3 then
+                lastAuto = clockNow()
+                fireRemote("SetAutoSkip", "FireServer", {false, n = 1}, 3)
             end
-            local base = waveStart[curWave] or clockNow()
-            while alive() and not gameOver and clockNow() - base < (tonumber(sp.Delay) or 0) do
-                task.wait(0.1)
-            end
-            if alive() and not gameOver then
-                fireRemote(sp.Remote, sp.Method, deserializeArgs(sp.Args or {n = 0}, refs), 5)
-            end
+            task.wait(0.5)
         end
     end)
 
     task.spawn(function()
         local byWave = {}
         for _, sk in ipairs(cfg.Skips or {}) do
-            local w = tonumber(sk.Wave) or 0
-            byWave[w] = byWave[w] or {}
-            table.insert(byWave[w], sk)
+            byWave[tonumber(sk.Wave) or 0] = tonumber(sk.Delay) or 0
         end
-        local defaultSkip = (cfg.Skips or {})[1]
-        local doneWave = {}
+        local sr = cfg.SkipRemote or {Remote = "SkipWave", Method = "FireServer", Args = {n = 0}}
+        local done = {}
         local was = false
         local since = nil
         while alive() and not gameOver do
-            local s = isShown(PATH_SKIP)
-            if s and not was then
+            local shown = isShown(PATH_SKIP)
+            if shown and not was then
                 since = clockNow()
             end
-            was = s
-            if s and since and not doneWave[curWave] then
-                local list = byWave[curWave]
-                if playback.skipAll and not list then
-                    list = {{Delay = 0, Remote = defaultSkip and defaultSkip.Remote or "SkipWave", Method = defaultSkip and defaultSkip.Method or "InvokeServer", Args = defaultSkip and defaultSkip.Args or {"y", n = 1}}}
-                end
-                if list then
-                    doneWave[curWave] = true
-                    local w = curWave
-                    task.spawn(function()
-                        for _, sk in ipairs(list) do
-                            while alive() and not gameOver and clockNow() - since < (tonumber(sk.Delay) or 0) do
-                                task.wait(0.05)
-                            end
-                            if alive() and not gameOver and isShown(PATH_SKIP) and curWave == w then
-                                fireRemote(sk.Remote, sk.Method, deserializeArgs(sk.Args or {n = 0}, refs), 5)
-                            end
-                        end
-                    end)
-                end
+            was = shown
+            local w = curWave
+            if shown and since and not done[w] and byWave[w] ~= nil then
+                done[w] = true
+                local s0 = since
+                local delay = byWave[w]
+                task.spawn(function()
+                    while alive() and not gameOver and clockNow() - s0 < delay do
+                        task.wait(0.05)
+                    end
+                    if alive() and not gameOver and curWave == w and isShown(PATH_SKIP) then
+                        fireRemote(sr.Remote, sr.Method, deserializeArgs(sr.Args or {n = 0}, refs), 5)
+                    end
+                end)
             end
             task.wait(0.05)
         end
     end)
 
-    local total = #(cfg.Actions or {})
-    for i, a in ipairs(cfg.Actions or {}) do
-        if not alive() or gameOver then
-            break
+    local remotes = cfg.Remotes or {}
+    local function waitTime(ev)
+        local w = tonumber(ev.Wave) or 0
+        while alive() and not gameOver and curWave < w do
+            playback.status = string.format("Wave %d | Đợi wave %d", curWave, w)
+            task.wait(0.1)
         end
-        local needWave = tonumber(a.Wave) or 0
-        while alive() and not gameOver and curWave < needWave do
-            playback.status = string.format("Wave %d | Waiting wave %d for %s %s (%d/%d)", curWave, needWave, a.Type, a.Unit or "", i, total)
-            task.wait(0.2)
-        end
-        local cost = tonumber(a.Cost) or 0
-        while alive() and not gameOver and cost > 0 and getCash() < cost do
-            playback.status = string.format("Wave %d | Waiting cash %d/%d for %s %s (%d/%d)", curWave, math.floor(getCash()), cost, a.Type, a.Unit or "", i, total)
-            task.wait(0.2)
-        end
-        if not alive() or gameOver then
-            break
-        end
-        playback.status = string.format("Wave %d | %s %s (%d/%d)", curWave, a.Type, a.Unit or "", i, total)
-        if a.Type == "Place" then
-            local pos = a.Pos and Vector3.new(a.Pos[1], a.Pos[2], a.Pos[3]) or nil
-            for attempt = 1, 30 do
-                if not alive() or gameOver then
-                    break
-                end
-                local args = deserializeArgs(a.Args or {n = 0}, refs)
-                local before = {}
-                for _, m in ipairs(unitModels(a.Unit)) do
-                    before[m] = true
-                end
-                local ok, res = fireRemote(a.Remote, a.Method, args, 6)
-                local model = waitNewUnit(a.Unit, pos, before, 1.5)
-                if model then
-                    refs[a.Ref or (#refs + 1)] = {model = model, ret = firstScalar(ok and res or nil), attrs = modelAttrs(model)}
-                    break
-                end
-                playback.status = string.format("Wave %d | Retry %s %d (%d/%d)", curWave, a.Unit or "", attempt, i, total)
-                task.wait(0.5)
-                while alive() and not gameOver and cost > 0 and getCash() < cost do
-                    task.wait(0.2)
-                end
+        if curWave == w then
+            local base = waveStart[w] or clockNow()
+            while alive() and not gameOver and curWave == w and clockNow() - base < (tonumber(ev.Delay) or 0) do
+                task.wait(0.05)
             end
-        else
-            local args, missing = deserializeArgs(a.Args or {n = 0}, refs)
+        end
+    end
+
+    local function placeUnit(ev, idx, total)
+        local price = tonumber((cfg.Price or {})[ev.Unit]) or tonumber(ev.Cost) or 0
+        local baseCost = price
+        local base = Vector3.new(ev.Pos[1], ev.Pos[2], ev.Pos[3])
+        local mag, ring = 0.1, 1
+        for attempt = 1, 80 do
+            while alive() and not gameOver and price > 0 and getCash() < price do
+                playback.status = string.format("Wave %d | Đợi tiền %s/%s đặt %s (%d/%d)", curWave, math.floor(getCash()), price, ev.Unit, idx, total)
+                task.wait(0.2)
+            end
+            if not alive() or gameOver then
+                return false
+            end
+            playback.status = string.format("Wave %d | Đặt %s (%d/%d)", curWave, ev.Unit, idx, total)
+            local off = PLACE_OFFSETS[ring]
+            local pos = jitterPos(Vector3.new(base.X + off[1], base.Y, base.Z + off[2]), mag)
+            local before = {}
+            for _, m in ipairs(unitModels(ev.Unit)) do
+                before[m] = true
+            end
+            local cashAt = getCash()
+            local p = cfg.Place or {}
+            local ok, res = fireRemote(p.Remote or "PlaceUnit", p.Method or "InvokeServer", buildPlaceArgs(cfg, ev, pos, attempt, refs), 6)
+            local model = nil
+            if not (ok and remoteRejected(res)) then
+                model = waitNewUnit(ev.Unit, pos, before, 1.5, claimed)
+            end
+            if model then
+                refs[ev.Ref] = {model = model, ret = firstScalar(ok and res or nil), attrs = modelAttrs(model)}
+                return true
+            end
+            if ok and remoteRejected(res) and baseCost > 0 then
+                price = math.min(math.max(price, math.floor(cashAt) + 1), math.floor(baseCost * 1.5))
+            end
+            local floor = mag <= 0.0301
+            mag = math.max(0.03, mag - 0.01)
+            if floor then
+                mag = 0.1
+                ring = ring % #PLACE_OFFSETS + 1
+            end
+            task.wait(0.3)
+        end
+        return false
+    end
+
+    local totalPlace = 0
+    for _, ev in ipairs(cfg.Events or {}) do
+        if ev.Type == "Place" then
+            totalPlace = totalPlace + 1
+        end
+    end
+    local placed = 0
+    for _, ev in ipairs(cfg.Events or {}) do
+        if not alive() or gameOver then
+            break
+        end
+        waitTime(ev)
+        if not alive() or gameOver then
+            break
+        end
+        if ev.Type == "Place" then
+            placed = placed + 1
+            placeUnit(ev, placed, totalPlace)
+        elseif ev.Type == "UpgradeAll" then
+            local tpl = remotes.UpgradeAll or {Remote = "UpgradeAll", Method = "InvokeServer", Args = {n = 0}}
+            local w = tonumber(ev.Wave) or 0
+            local need = tonumber(ev.Cost) or 0
+            while alive() and not gameOver and need > 0 and getCash() < need and curWave <= w do
+                playback.status = string.format("Wave %d | Đợi tiền Upgrade All %s/%s", curWave, math.floor(getCash()), need)
+                task.wait(0.1)
+            end
+            if alive() and not gameOver then
+                playback.status = string.format("Wave %d | Upgrade All", curWave)
+                fireRemote(tpl.Remote, tpl.Method, deserializeArgs(tpl.Args or {n = 0}, refs), 5)
+            end
+        elseif ev.Type == "Ability" then
+            local args, missing = deserializeArgs(ev.Args or {n = 0}, refs)
             if not missing then
-                fireRemote(a.Remote, a.Method, args, 6)
+                playback.status = string.format("Wave %d | Dùng kỹ năng", curWave)
+                fireRemote(ev.Remote or "ActivateUnitAbility", ev.Method or "InvokeServer", args, 5)
             end
         end
-        task.wait(0.15)
     end
 
     while alive() and not gameOver do
-        playback.status = string.format("Wave %d | Macro done, waiting game end", curWave)
+        playback.status = string.format("Wave %d | Macro xong, đợi hết trận", curWave)
         task.wait(0.5)
     end
     if gameOver then
@@ -1287,13 +1841,17 @@ local function startPlayback()
         return
     end
     if not playback.file then
-        playback.status = "Select a macro first"
-        return
+        playback.status = "Chọn file macro trước"
+        return false
     end
     local cfg = loadMacroFile(playback.file)
     if not cfg then
-        playback.status = "Cannot load " .. tostring(playback.file)
-        return
+        playback.status = "Không đọc được " .. tostring(playback.file)
+        return false
+    end
+    if cfg.Version ~= 3 then
+        playback.status = "File macro bản cũ không chạy được, hãy ghi lại bằng bản mới"
+        return false
     end
     playback.playing = true
     playback.runId = playback.runId + 1
@@ -1302,7 +1860,7 @@ local function startPlayback()
         while playback.playing and playback.runId == runId do
             local okRun, result = pcall(playOnce, cfg, runId)
             if not okRun then
-                playback.status = "Error: " .. tostring(result)
+                playback.status = "Lỗi: " .. tostring(result)
                 task.wait(1)
             end
             if not (playback.playing and playback.runId == runId) then
@@ -1310,95 +1868,240 @@ local function startPlayback()
             end
             if result == "ended" then
                 if playback.autoReplay then
-                    playback.status = "Game end | Restart"
-                    restartGame()
-                    local w = 0
-                    while gameEndShown() and w < 15 do
-                        task.wait(0.2)
-                        w = w + 0.5
+                    playback.status = "Hết trận | Chơi lại"
+                    while playback.playing and playback.runId == runId and isShown(PATH_GAMEEND) do
+                        if restartGame() then
+                            playback.restartedAt = clockNow()
+                        end
+                        task.wait(0.5)
                     end
                 else
                     playback.playing = false
-                    playback.status = "Game ended"
+                    playback.status = "Hết trận"
                     break
                 end
             end
             task.wait(0.3)
         end
     end)
+    return true
 end
 
 local function stopPlayback()
     playback.playing = false
     playback.runId = playback.runId + 1
-    playback.status = "Stopped"
+    playback.status = "Đã dừng"
 end
 
+local WINDOW_TITLE = "Nexus Stella Macro"
 local Window = redzlib:MakeWindow({
-    Title = "Nexus Stella Macro",
+    Title = WINDOW_TITLE,
     SubTitle = "By nhat0258",
     SaveFolder = "NxsMacro_UI.json"
 })
 
-local TabMacro = Window:MakeTab({"Macro", "play"})
-local TabHistory = Window:MakeTab({"History", "list"})
+local UserInputService = game:GetService("UserInputService")
+local LOGO_STATE_FILE = "NxsMacro_UIState.json"
 
-TabMacro:AddSection({"Record"})
+local function findMacroWindowGui()
+    local found = nil
+    local roots = {}
+    pcall(function()
+        if gethui then
+            roots[#roots + 1] = gethui()
+        end
+    end)
+    pcall(function()
+        roots[#roots + 1] = game:GetService("CoreGui")
+    end)
+    for _, root in ipairs(roots) do
+        pcall(function()
+            for _, g in ipairs(root:GetChildren()) do
+                if not found and g.Name == "redz Library V5" then
+                    for _, d in ipairs(g:GetDescendants()) do
+                        if d:IsA("TextLabel") and d.Text == WINDOW_TITLE then
+                            found = g
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+        if found then
+            break
+        end
+    end
+    return found
+end
+
+local function saveLogoState(hidden)
+    pcall(function()
+        writefile(LOGO_STATE_FILE, HttpService:JSONEncode({UIHidden = hidden}))
+    end)
+end
+
+local function createLogo()
+    local parent = guiParent()
+    pcall(function()
+        local old = parent:FindFirstChild("NxsMacroLogoGui")
+        if old then
+            old:Destroy()
+        end
+    end)
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "NxsMacroLogoGui"
+    sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.DisplayOrder = 10000
+    sg.Parent = parent
+
+    local btn = Instance.new("ImageButton")
+    btn.Name = "Logo"
+    btn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    btn.BackgroundTransparency = 0.5
+    btn.Position = UDim2.new(0.1, 0, 0.22, 0)
+    btn.Size = UDim2.new(0, 50, 0, 50)
+    btn.AutoButtonColor = false
+    btn.Active = true
+    btn.Parent = sg
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 12)
+    c.Parent = btn
+    local st = Instance.new("UIStroke")
+    st.Color = Color3.fromRGB(192, 132, 252)
+    st.Thickness = 1.5
+    st.Transparency = 0.2
+    st.Parent = btn
+    local tag = Instance.new("TextLabel")
+    tag.BackgroundColor3 = Color3.fromRGB(124, 58, 237)
+    tag.AnchorPoint = Vector2.new(0.5, 0)
+    tag.Position = UDim2.new(0.5, 0, 1, 2)
+    tag.Size = UDim2.new(0, 46, 0, 14)
+    tag.Font = Enum.Font.GothamBold
+    tag.TextSize = 10
+    tag.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tag.Text = "MACRO"
+    tag.Parent = btn
+    local tc = Instance.new("UICorner")
+    tc.CornerRadius = UDim.new(0, 6)
+    tc.Parent = tag
+
+    task.spawn(function()
+        local ok, img = pcall(function()
+            local fileName = "NexusLogo_ATx.png"
+            if not isfile(fileName) then
+                writefile(fileName, game:HttpGet("https://raw.githubusercontent.com/nguyennhlat2004/Roblox-Api/main/ATx.png"))
+            end
+            return getcustomasset(fileName)
+        end)
+        if ok and img then
+            btn.Image = img
+        else
+            btn.Image = "rbxassetid://13347535978"
+        end
+    end)
+
+    local dragging, moved, dragStart, startPos, dragInput = false, false, nil, nil, nil
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            dragStart = input.Position
+            startPos = btn.Position
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging or not dragStart then
+            return
+        end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input == dragInput or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then
+                moved = true
+            end
+            if moved then
+                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if not dragging then
+            return
+        end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            if not moved then
+                local g = findMacroWindowGui()
+                if g then
+                    g.Enabled = not g.Enabled
+                    saveLogoState(not g.Enabled)
+                end
+            end
+        end
+    end)
+end
+
+pcall(createLogo)
+
+task.spawn(function()
+    local hidden = false
+    pcall(function()
+        if isfile(LOGO_STATE_FILE) then
+            local d = HttpService:JSONDecode(readfile(LOGO_STATE_FILE))
+            hidden = type(d) == "table" and d.UIHidden == true
+        end
+    end)
+    if hidden then
+        task.wait(0.5)
+        local g = findMacroWindowGui()
+        if g then
+            g.Enabled = false
+        end
+    end
+end)
+
+local TabMacro = Window:MakeTab({"Macro", "play"})
+local TabHistory = Window:MakeTab({"Lịch sử", "list"})
+
+TabMacro:AddSection({"Ghi Macro"})
 
 TabMacro:AddTextBox({
-    Name = "Macro Name",
-    Description = "File name when saving",
-    PlaceholderText = "Enchanted L5",
+    Name = "Tên Macro",
+    Description = "Tên file khi lưu",
+    PlaceholderText = "Garden Grind L5",
     Callback = function(Value)
         macroNameInput = tostring(Value or "")
     end
 })
 
-TabMacro:AddToggle({
-    Name = "Record Speed (x2/x3)",
-    Default = true,
-    Flag = "NxsRecSpeed",
-    Callback = function(Value)
-        recorder.recSpeed = Value == true
-    end
-})
-
-TabMacro:AddToggle({
-    Name = "Record Skip Wave",
-    Description = "Saves the delay after the Skip button appears",
-    Default = true,
-    Flag = "NxsRecSkip",
-    Callback = function(Value)
-        recorder.recSkip = Value == true
-    end
-})
-
 local recordToggle = nil
 recordToggle = TabMacro:AddToggle({
-    Name = "Record Macro",
-    Description = "Turn off to stop and save",
+    Name = "Ghi Macro",
+    Description = "Chỉ ghi: Vote độ khó, Skip từng wave, Đặt unit, Upgrade All, Kỹ năng. Tự dừng và lưu khi hết wave cuối và hết enemy",
     Default = false,
     Callback = function(Value)
         if Value then
             if not startRecording() then
                 task.defer(function()
                     pcall(function()
-                        recordToggle:Set(false)
+                        recordToggle:Set(false, true)
                     end)
                 end)
             end
         else
-            task.spawn(stopRecording)
+            task.spawn(stopRecording, false)
         end
     end
 })
+recordToggleRef.t = recordToggle
 
-local recordParagraph = TabMacro:AddParagraph({"Record Status", hookReady and "Idle" or "Executor does not support hookmetamethod"})
+local recordParagraph = TabMacro:AddParagraph({"Trạng thái ghi", hookReady and ("Chưa ghi | Hook: " .. hookInfo) or "Executor không hỗ trợ hook, không ghi được"})
 
-TabMacro:AddSection({"Play"})
+TabMacro:AddSection({"Chạy Macro"})
 
 local playDropdown = TabMacro:AddDropdown({
-    Name = "Macro File",
+    Name = "File Macro",
     Options = historyNames(),
     Default = "",
     Callback = function(Value)
@@ -1409,7 +2112,8 @@ local playDropdown = TabMacro:AddDropdown({
 })
 
 TabMacro:AddToggle({
-    Name = "Auto Replay",
+    Name = "Tự chơi lại",
+    Description = "Hết trận tự restart, vote lại và chạy tiếp",
     Default = true,
     Flag = "NxsAutoReplay",
     Callback = function(Value)
@@ -1418,47 +2122,53 @@ TabMacro:AddToggle({
 })
 
 TabMacro:AddToggle({
-    Name = "Skip Every Wave",
-    Description = "Also skip waves that were not recorded",
-    Default = false,
-    Flag = "NxsSkipAll",
+    Name = "Giữ tốc độ x2",
+    Default = true,
+    Flag = "NxsKeepSpeed",
     Callback = function(Value)
-        playback.skipAll = Value == true
+        playback.keepSpeed = Value == true
     end
 })
 
-TabMacro:AddToggle({
-    Name = "Play Macro",
+local playToggle = nil
+playToggle = TabMacro:AddToggle({
+    Name = "Chạy Macro",
     Default = false,
     Callback = function(Value)
         if Value then
-            startPlayback()
+            if startPlayback() == false then
+                task.defer(function()
+                    pcall(function()
+                        playToggle:Set(false, true)
+                    end)
+                end)
+            end
         else
             stopPlayback()
         end
     end
 })
 
-local playParagraph = TabMacro:AddParagraph({"Play Status", "Idle"})
+local playParagraph = TabMacro:AddParagraph({"Trạng thái chạy", "Chưa chạy"})
 
 local historySelected = nil
 local historyParagraph = nil
 
 local function historySummary(fileName)
+    local cfg = loadMacroFile(fileName)
     for _, e in ipairs(readHistory()) do
         if e.file == fileName then
-            return string.format("%s\nCreated: %s\nActions: %s | Skips: %s | Speed: %s\nLast wave: %s | Place: %s", tostring(e.name), tostring(e.created), tostring(e.actions), tostring(e.skips), tostring(e.speeds), tostring(e.lastWave), tostring(e.place))
+            return string.format("%s\nTạo lúc: %s\n%s", tostring(e.name), tostring(e.created), cfg and configSummary(cfg) or "")
         end
     end
-    local cfg = loadMacroFile(fileName)
     if cfg then
-        return string.format("%s\nCreated: %s\nActions: %d | Skips: %d | Speed: %d", tostring(cfg.Name), tostring(cfg.CreatedAt), #(cfg.Actions or {}), #(cfg.Skips or {}), #(cfg.Speed or {}))
+        return string.format("%s\nTạo lúc: %s\n%s", tostring(cfg.Name), tostring(cfg.CreatedAt), configSummary(cfg))
     end
-    return "N/A"
+    return "Không đọc được file"
 end
 
 local historyDropdown = TabHistory:AddDropdown({
-    Name = "Saved Macros",
+    Name = "Macro đã lưu",
     Options = historyNames(),
     Default = "",
     Callback = function(Value)
@@ -1473,27 +2183,44 @@ local historyDropdown = TabHistory:AddDropdown({
     end
 })
 
-historyParagraph = TabHistory:AddParagraph({"Macro Info", "Select a macro"})
+historyParagraph = TabHistory:AddParagraph({"Thông tin Macro", "Chọn một macro"})
 
 TabHistory:AddButton({
-    Name = "View Config",
+    Name = "Xem Config",
+    Description = "Mở bảng config để xem và sao chép",
     Callback = function()
         if not historySelected then
             return
         end
-        local _, text = loadMacroFile(historySelected)
+        local cfg, text = loadMacroFile(historySelected)
         if text then
-            showConfigPanel(historySelected, text)
+            pcall(showConfigPanel, historySelected, text, cfg and configSummary(cfg) or "")
         end
     end
 })
 
 TabHistory:AddButton({
-    Name = "Use For Play",
+    Name = "Sao chép Config",
+    Callback = function()
+        if not historySelected then
+            return
+        end
+        local _, text = loadMacroFile(historySelected)
+        if text and historyParagraph then
+            local ok = copyText(text)
+            pcall(function()
+                historyParagraph:SetDesc(ok and ("Đã sao chép " .. historySelected) or "Executor không hỗ trợ sao chép")
+            end)
+        end
+    end
+})
+
+TabHistory:AddButton({
+    Name = "Dùng để chạy",
     Callback = function()
         if historySelected then
             playback.file = historySelected
-            playback.status = "Selected " .. historySelected
+            playback.status = "Đã chọn " .. historySelected
         end
     end
 })
@@ -1509,7 +2236,7 @@ local function refreshLists()
 end
 
 TabHistory:AddButton({
-    Name = "Delete Macro",
+    Name = "Xóa Macro",
     Callback = function()
         if not historySelected then
             return
@@ -1528,14 +2255,14 @@ TabHistory:AddButton({
         writeHistory(kept)
         historySelected = nil
         pcall(function()
-            historyParagraph:SetDesc("Deleted")
+            historyParagraph:SetDesc("Đã xóa")
         end)
         refreshLists()
     end
 })
 
 TabHistory:AddButton({
-    Name = "Refresh",
+    Name = "Làm mới",
     Callback = refreshLists
 })
 
@@ -1543,7 +2270,26 @@ local lastCount = #historyNames()
 task.spawn(function()
     while true do
         pcall(function()
-            recordParagraph:SetDesc(recorder.active and string.format("%s\nWave %d | Actions %d | Skips %d | Speed %d", recorder.status, recorder.lastWave, #recorder.actions, #recorder.skips, #recorder.speeds) or recorder.status)
+            if recorder.active then
+                local np, nu, na, ns = 0, 0, 0, 0
+                for _, ev in ipairs(recorder.events) do
+                    if not ev.Failed then
+                        if ev.Type == "Place" then
+                            np = np + 1
+                        elseif ev.Type == "UpgradeAll" then
+                            nu = nu + 1
+                        elseif ev.Type == "Ability" then
+                            na = na + 1
+                        end
+                    end
+                end
+                for _ in pairs(recorder.skips) do
+                    ns = ns + 1
+                end
+                recordParagraph:SetDesc(string.format("%s\nWave %d/%d | Đặt %d | Upgrade All %d | Kỹ năng %d | Skip %d wave | Vote: %s", recorder.status, recorder.lastWave, recorder.maxWave or 0, np, nu, na, ns, recorder.difficulty and "có" or "chưa"))
+            else
+                recordParagraph:SetDesc(recorder.status)
+            end
             playParagraph:SetDesc(playback.status)
         end)
         local n = #historyNames()
@@ -1554,4 +2300,3 @@ task.spawn(function()
         task.wait(0.5)
     end
 end)
-
