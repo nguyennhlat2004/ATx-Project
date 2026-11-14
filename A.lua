@@ -2673,9 +2673,8 @@ local GG5 = {
                 UfoReserve = 0,
                 DefaultAngle = {-math.pi, 0, -math.pi},
                 DefaultRotation = 180,
-                HPSkip = {
-                    FromWave = 37,
-                    MaxTotalHP = 200000,
+                AutoSkipOff = {
+                    {FromWave = 37, ToWave = 37},
                 },
                 Abilities = {
                     {
