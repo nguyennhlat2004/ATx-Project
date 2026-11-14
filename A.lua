@@ -1360,8 +1360,8 @@ local function ensureAutoSkip(want, nowFn)
     return st
 end
 
-local function autoSkipStep(nowFn)
-    if ensureAutoSkip(true, nowFn) == true then
+local function autoSkipStep(nowFn, noNative)
+    if not noNative and ensureAutoSkip(true, nowFn) == true then
         skipState.votedText = nil
         return false
     end
@@ -2623,7 +2623,170 @@ EE_NIGHT.load = function(level)
     return data, url
 end
 
+local GG5 = {
+    selected = "Level 5",
+    toggle = nil,
+    levels = {
+        ["Level 5"] = {
+            url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/Garden-Grind-Level5.lua",
+            fallback = {
+                Name = "Garden Grind ( Level 5 )",
+                Difficulty = "dif_impossible",
+                MaxPlace = 20,
+                UfoReserve = 0,
+                DefaultAngle = {-math.pi, 0, -math.pi},
+                DefaultRotation = 180,
+                HPSkip = {
+                    FromWave = 37,
+                    MaxTotalHP = 200000,
+                },
+                Abilities = {
+                    {
+                        Unit = "unit_venom_plant",
+                        Interval = 1,
+                        Trigger = {
+                            Ref = "unit_trithorn",
+                            RefPos = {-846.80, 61.93, -165.55},
+                            MaxDX = 75,
+                            PassZ = true,
+                        },
+                    },
+                },
+                Price = {
+                    unit_trithorn = 333,
+                    unit_mint_bloom = 3200,
+                    unit_stringshade = 2777,
+                    unit_metal_bloom = 9250,
+                    unit_venom_plant = 4300,
+                },
+                Events = {
+                    {
+                        Type = "StartPlace",
+                        Name = "Place1_Trithorn",
+                        HardCap = 1,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        Units = {
+                            {name = "unit_trithorn", pos = {-846.80, 61.93, -165.55}},
+                        },
+                    },
+                    {
+                        Type = "StartUpgradeAll",
+                        Name = "Upgrade_Main",
+                        RequireMinPlaced = 1,
+                        UntilGameEnd = true,
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 4,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place2_Pushpetal",
+                        HardCap = 3,
+                        MaxCount = 2,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_mint_bloom", pos = {-847.49, 61.93, -145.44}},
+                            {name = "unit_mint_bloom", pos = {-856.71, 61.93, -145.68}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 21,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place3_Stringshade",
+                        HardCap = 6,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_stringshade", pos = {-813.11, 61.93, -162.70}},
+                            {name = "unit_stringshade", pos = {-814.27, 61.93, -159.01}},
+                            {name = "unit_stringshade", pos = {-812.35, 61.93, -160.70}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 25,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place4_MetalBloom",
+                        HardCap = 7,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_metal_bloom", pos = {-853.41, 61.93, -154.66}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 31,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place5_Venom",
+                        HardCap = 10,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_venom_plant", pos = {-848.08, 61.93, -159.65}},
+                            {name = "unit_venom_plant", pos = {-853.88, 61.93, -160.81}},
+                            {name = "unit_venom_plant", pos = {-847.82, 61.93, -152.89}},
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+GG5.load = function(level)
+    local entry = GG5.levels[tostring(level or GG5.selected)] or GG5.levels["Level 5"]
+    local url = entry.url
+    local data = decodeFarmLua(httpGet(url))
+    local nm = type(data) == "table" and string.lower(tostring(data.Name or "")) or ""
+    if not profileMatches(data, "garden") or type(data.Events) ~= "table" or not nm:find("5", 1, true) then
+        data = deepCopy(entry.fallback)
+        url = "embedded:GardenGrind5"
+    end
+    if not data then
+        return nil, nil
+    end
+    data.Difficulty = data.Difficulty or "dif_impossible"
+    return data, url
+end
+
 local function loadActiveProfile()
+    if currentFarm == "GardenGrind5" then
+        return GG5.load(GG5.selected)
+    end
     if currentFarm == "EnchantedEncounterNight" then
         return EE_NIGHT.load(EE_NIGHT.selected)
     end
@@ -2725,6 +2888,8 @@ local EE_UNIT_LABELS = {
     unit_trithorn = "Trithorn",
     unit_mint_bloom = "Pushpetal",
     unit_stringshade = "Stringshade",
+    unit_metal_bloom = "Metal Bloom",
+    unit_venom_plant = "Venom",
     unit_bronze_lucky_chomp = "Flytrap RNG",
 }
 
@@ -3167,11 +3332,25 @@ local function runFarmProfile(profile)
                         off = true
                     end
                 end
+                local hp = type(profile.HPSkip) == "table" and profile.HPSkip or nil
+                local hpMode = hp ~= nil and w >= (tonumber(hp.FromWave) or math.huge)
+                if hpMode then
+                    off = true
+                end
                 if off ~= wasOff then
                     wasOff = off
                     skipState.lastAuto = nil
                 end
-                if off then
+                if hpMode then
+                    ensureAutoSkip(false, clockNow)
+                    local info = getEnemyHealth()
+                    if (tonumber(info.hp) or 0) < (tonumber(hp.MaxTotalHP) or 200000) then
+                        local okS = pcall(autoSkipStep, clockNow, true)
+                        if not okS then
+                            task.wait(0.5)
+                        end
+                    end
+                elseif off then
                     ensureAutoSkip(false, clockNow)
                 else
                     local okS = pcall(autoSkipStep, clockNow)
@@ -3395,6 +3574,51 @@ local function runFarmProfile(profile)
         end)
     end
 
+    local enemyFirstZ = setmetatable({}, {__mode = "k"})
+    local function abilityTriggerMet(cfg)
+        local folder = getEntitiesFolder()
+        if not folder then
+            return false
+        end
+        local ref = nil
+        pcall(function()
+            for _, m in ipairs(folder:GetChildren()) do
+                if nameMatchesUnit(m.Name, cfg.Ref) and m:IsA("Model") then
+                    ref = m:GetPivot().Position
+                    break
+                end
+            end
+        end)
+        if not ref and type(cfg.RefPos) == "table" then
+            ref = Vector3.new(tonumber(cfg.RefPos[1]) or 0, tonumber(cfg.RefPos[2]) or 0, tonumber(cfg.RefPos[3]) or 0)
+        end
+        if not ref then
+            return false
+        end
+        local maxDX = tonumber(cfg.MaxDX) or 75
+        local hit = false
+        pcall(function()
+            for _, m in ipairs(folder:GetChildren()) do
+                local n = string.lower(tostring(m.Name))
+                if n:sub(1, 5) ~= "unit_" and n:find("enemy", 1, true) and m:IsA("Model") then
+                    local pos = m:GetPivot().Position
+                    if math.abs(pos.X - ref.X) <= maxDX then
+                        hit = true
+                    end
+                    if cfg.PassZ then
+                        local fz = enemyFirstZ[m]
+                        if fz == nil then
+                            enemyFirstZ[m] = pos.Z
+                        elseif (fz - ref.Z) * (pos.Z - ref.Z) < 0 then
+                            hit = true
+                        end
+                    end
+                end
+            end
+        end)
+        return hit
+    end
+
     if type(profile.Abilities) == "table" and #profile.Abilities > 0 then
         task.spawn(function()
             local lastFire = {}
@@ -3406,7 +3630,11 @@ local function runFarmProfile(profile)
                         local ids, count = getAbilityIds(unitName)
                         local interval = tonumber(ab.Interval or ab.interval) or 2
                         local now = clockNow()
-                        if #ids > 0 and (not lastFire[unitName] or now - lastFire[unitName] >= interval) then
+                        local trig = true
+                        if type(ab.Trigger) == "table" and #ids > 0 then
+                            trig = abilityTriggerMet(ab.Trigger)
+                        end
+                        if trig and #ids > 0 and (not lastFire[unitName] or now - lastFire[unitName] >= interval) then
                             lastFire[unitName] = now
                             for _, id in ipairs(ids) do
                                 pcall(function()
@@ -3663,102 +3891,6 @@ local function setToggleSilent(toggle, value)
 end
 
 local function startFarmFor(name)
-    local function notify(text)
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "Nexus Stella",
-                Text = text,
-                Duration = 10,
-            })
-        end)
-    end
-    local function requiredUnits(prof)
-        local list, seen = {}, {}
-        local function addUnits(units)
-            for _, u in ipairs(type(units) == "table" and units or {}) do
-                local n = type(u) == "table" and tostring(u.name or u.Name or u[1] or "") or tostring(u)
-                if n ~= "" and not seen[string.lower(n)] then
-                    seen[string.lower(n)] = true
-                    list[#list + 1] = n
-                end
-            end
-        end
-        local function addEvents(evs)
-            for _, ev in ipairs(type(evs) == "table" and evs or {}) do
-                addUnits(ev.Units or ev.units)
-                addUnits(ev.FillRemainWith or ev.fillRemainWith)
-            end
-        end
-        addEvents(prof.Events)
-        if type(prof.Stage2) == "table" then
-            addEvents(prof.Stage2.Events)
-        end
-        return list
-    end
-    local function backpackNames()
-        local names = {}
-        pcall(function()
-            local holders = {player:FindFirstChildOfClass("Backpack"), player.Character}
-            for _, h in ipairs(holders) do
-                if h then
-                    for _, t in ipairs(h:GetChildren()) do
-                        if t:IsA("Tool") then
-                            names[#names + 1] = tostring(t.Name)
-                        end
-                    end
-                end
-            end
-        end)
-        return names
-    end
-    local prevFarm = currentFarm
-    currentFarm = name
-    local checkData = loadActiveProfile()
-    currentFarm = prevFarm
-    if checkData and checkData.Night ~= true then
-        local have = backpackNames()
-        local t0 = clockNow()
-        while #have == 0 and clockNow() - t0 < 3 do
-            task.wait(0.25)
-            have = backpackNames()
-        end
-        local missing = {}
-        for _, need in ipairs(requiredUnits(checkData)) do
-            local found = false
-            for _, h in ipairs(have) do
-                if nameMatchesUnit(h, need) then
-                    found = true
-                    break
-                end
-            end
-            if not found then
-                missing[#missing + 1] = eeUnitLabel(need)
-            end
-        end
-        if #missing > 0 then
-            local msg = "Thiếu unit trong Backpack: " .. table.concat(missing, ", ") .. ". Không chạy farm."
-            if #have == 0 then
-                msg = "Không thấy unit nào trong Backpack. Không chạy farm."
-            end
-            notify(msg)
-            farmStatusText = "Missing Units: " .. table.concat(missing, ", ")
-            local toggles = {
-                RadioactiveRampage = radioactiveRampageToggle,
-                EnchantedEncounter = enchantedEncounterToggle,
-                GardenGrind = gardenGrindToggle,
-                EnchantedEncounterNight = EE_NIGHT.toggle,
-            }
-            local tg = toggles[name]
-            task.spawn(function()
-                pcall(function()
-                    if tg then
-                        tg:Set(false, true)
-                    end
-                end)
-            end)
-            return
-        end
-    end
     if autoFarmEnabled and currentFarm ~= name then
         local other = currentFarm
         currentFarm = name
@@ -3770,6 +3902,8 @@ local function startFarmFor(name)
             setToggleSilent(gardenGrindToggle, false)
         elseif other == "EnchantedEncounterNight" then
             setToggleSilent(EE_NIGHT.toggle, false)
+        elseif other == "GardenGrind5" then
+            setToggleSilent(GG5.toggle, false)
         end
     end
     currentFarm = name
@@ -3908,6 +4042,35 @@ if TabMain then
                 startFarmFor("EnchantedEncounterNight")
             else
                 stopFarmFor("EnchantedEncounterNight")
+            end
+        end
+    })
+
+    TabMain:AddDropdown({
+        Name = "Garden Grind Level 5 Mode",
+        Options = {"Level 5"},
+        Default = "Level 5",
+        Flag = "GardenGrind5Level",
+        Callback = function(Value)
+            local v = tostring(Value or "Level 5")
+            GG5.selected = GG5.levels[v] and v or "Level 5"
+            if currentFarm == "GardenGrind5" then
+                local data = loadActiveProfile()
+                if data then
+                    farmProfile = data
+                end
+            end
+        end
+    })
+
+    GG5.toggle = TabMain:AddToggle({
+        Name = "Auto Farm Garden Grind Level 5",
+        Default = false,
+        Callback = function(Value)
+            if Value then
+                startFarmFor("GardenGrind5")
+            else
+                stopFarmFor("GardenGrind5")
             end
         end
     })
