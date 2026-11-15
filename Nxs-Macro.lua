@@ -1,6 +1,9 @@
 local redzlib = loadstring(game:HttpGet("https://raw.githubusercontent.com/nhat0258/Redz-UI-Library/refs/heads/main/Main.lua"))()
 
 local HttpService = game:GetService("HttpService")
+pcall(function()
+    math.randomseed(math.floor((tick() % 1000000) * 1000) + math.floor(os.clock() * 1000))
+end)
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
@@ -42,13 +45,14 @@ local function currentContext()
             best = lc
             return
         end
-        for _, c in ipairs(ctx:GetChildren()) do
-            if c:FindFirstChild("Entities") then
-                best = c
+        local kids = ctx:GetChildren()
+        for i = #kids, 1, -1 do
+            if kids[i]:FindFirstChild("Entities") then
+                best = kids[i]
                 return
             end
         end
-        best = ctx:GetChildren()[1]
+        best = kids[#kids]
     end)
     return best
 end
@@ -1540,12 +1544,13 @@ do
     end
 end
 
-local function jitterPos(pos, mag)
+local function jitterPos(pos, minMag, maxMag)
     local function axis()
+        local amount = minMag + math.random() * (maxMag - minMag)
         if math.random(1, 2) == 1 then
-            return -mag
+            return -amount
         end
-        return mag
+        return amount
     end
     local mode = math.random(1, 3)
     local dx, dz = 0, 0
@@ -1596,6 +1601,9 @@ local function buildPlaceArgs(cfg, ev, pos, attempt, refs)
     end
     data.Position = pos
     data.Attempt = attempt
+    if type(data.Rotation) == "number" then
+        data.Rotation = data.Rotation + math.random(-2, 2)
+    end
     local r = p.Rot
     if type(r) == "table" and #r == 9 then
         data.CF = CFrame.new(pos.X, pos.Y, pos.Z, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9])
@@ -1746,7 +1754,7 @@ local function playOnce(cfg, runId)
         local price = tonumber((cfg.Price or {})[ev.Unit]) or tonumber(ev.Cost) or 0
         local baseCost = price
         local base = Vector3.new(ev.Pos[1], ev.Pos[2], ev.Pos[3])
-        local mag, ring = 0.1, 1
+        local jMin, jMax, ring = 0.05, 0.2, 1
         for attempt = 1, 80 do
             while alive() and not gameOver and price > 0 and getCash() < price do
                 playback.status = string.format("Wave %d | Đợi tiền %s/%s đặt %s (%d/%d)", curWave, math.floor(getCash()), price, ev.Unit, idx, total)
@@ -1757,7 +1765,8 @@ local function playOnce(cfg, runId)
             end
             playback.status = string.format("Wave %d | Đặt %s (%d/%d)", curWave, ev.Unit, idx, total)
             local off = PLACE_OFFSETS[ring]
-            local pos = jitterPos(Vector3.new(base.X + off[1], base.Y, base.Z + off[2]), mag)
+            local pos = jitterPos(Vector3.new(base.X + off[1], base.Y, base.Z + off[2]), jMin, jMax)
+            task.wait(0.1 + math.random() * 0.35)
             local before = {}
             for _, m in ipairs(unitModels(ev.Unit)) do
                 before[m] = true
@@ -1776,10 +1785,11 @@ local function playOnce(cfg, runId)
             if ok and remoteRejected(res) and baseCost > 0 then
                 price = math.min(math.max(price, math.floor(cashAt) + 1), math.floor(baseCost * 1.5))
             end
-            local floor = mag <= 0.0301
-            mag = math.max(0.03, mag - 0.01)
+            local floor = jMax <= 0.0601
+            jMax = math.max(0.06, jMax - 0.02)
+            jMin = math.min(0.05, jMax * 0.5)
             if floor then
-                mag = 0.1
+                jMin, jMax = 0.05, 0.2
                 ring = ring % #PLACE_OFFSETS + 1
             end
             task.wait(0.3)
