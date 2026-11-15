@@ -1542,28 +1542,28 @@ local function getSpeedButton(n)
     local ok, b = pcall(function()
         return player.PlayerGui.GameGuiNoInset.Screen.Top.WaveControls.WaveControls.GameSpeed.Speeds:FindFirstChild(tostring(n))
     end)
-    if ok then
+    if ok and b then
         return b
     end
-    return nil
-end
-
-local function isSpeedLocked(n)
-    local b = getSpeedButton(n)
-    if not b then
-        return false
-    end
-    local lock = b:FindFirstChild("Lock")
-    if not lock then
-        return false
-    end
-    local ok, vis = pcall(function()
-        return lock.Visible
+    local found = nil
+    pcall(function()
+        local sp = entitiesCache.gui.__speeds
+        if not (sp and sp:IsDescendantOf(player.PlayerGui)) then
+            sp = nil
+            if os.clock() - (entitiesCache.scanAt.__speeds or -100) >= 2 then
+                entitiesCache.scanAt.__speeds = os.clock()
+                for _, d in ipairs(player.PlayerGui:GetDescendants()) do
+                    if d.Name == "Speeds" and d.Parent and d.Parent.Name == "GameSpeed" then
+                        sp = d
+                        break
+                    end
+                end
+                entitiesCache.gui.__speeds = sp
+            end
+        end
+        found = sp and sp:FindFirstChild(tostring(n))
     end)
-    if ok and vis == false then
-        return false
-    end
-    return true
+    return found
 end
 
 local function isSpeedSelected(n)
@@ -1597,36 +1597,38 @@ local function getCurrentSpeed()
 end
 
 local function getDesiredSpeed()
-    if isSpeedLocked(3) then
-        return 2
-    end
-    return 3
+    return 2
 end
 
 local function runSpeedMonitor(isActive, nowFn)
     local lastVote = -1000
-    local votedOnce = false
     local attempts = 0
     while isActive() do
         local want = getDesiredSpeed()
         local cur = getCurrentSpeed()
-        if (cur ~= nil and cur ~= want) or (cur == nil and not votedOnce) then
+        if (cur ~= nil and cur ~= want) or (cur == nil and attempts < 9) then
             local t = nowFn()
             if t - lastVote >= 2.5 then
                 attempts = attempts + 1
                 local pressed = false
-                if attempts % 2 == 1 then
+                local mode = attempts % 3
+                if mode == 1 then
                     pressed = pressGuiOnce(getSpeedButton(want))
                 end
                 if not pressed then
                     pcall(function()
-                        changeTickSpeed:InvokeServer(want)
+                        local cands = contextMode() and contextCandidates() or {}
+                        local cur2 = #cands > 0 and cands[((math.floor(attempts / 3)) % #cands) + 1] or nil
+                        if cur2 and mode ~= 0 then
+                            changeTickSpeed:InvokeServer(cur2, want)
+                        else
+                            changeTickSpeed:InvokeServer(want)
+                        end
                     end)
                 end
                 lastVote = t
-                votedOnce = true
             end
-        else
+        elseif cur ~= nil then
             attempts = 0
         end
         task.wait(0.5)
