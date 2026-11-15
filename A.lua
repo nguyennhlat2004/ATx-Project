@@ -817,13 +817,18 @@ local function getWaveNumber()
     return 0
 end
 
-local entitiesCache = {folder = nil, at = -100, night = false, lastCtx = nil, hooked = false, gui = {}, scanAt = {}}
+local entitiesCache = {folder = nil, at = -100, night = false, lastCtx = nil, hooked = false, gui = {}, scanAt = {}, owned = nil, lastPlace = "-", diag = true}
 
 local function getCurrentContext()
     local best = nil
     pcall(function()
         local ctx = workspace:FindFirstChild("Contexts")
         if not ctx then
+            return
+        end
+        local own = entitiesCache.owned
+        if own and own.Parent and own.Parent.Parent == ctx then
+            best = own.Parent
             return
         end
         if not entitiesCache.hooked then
@@ -850,6 +855,37 @@ local function getCurrentContext()
         best = kids[#kids]
     end)
     return best
+end
+
+local function contextCandidates()
+    local list, seen = {}, {}
+    local function add(c)
+        if c and not seen[c] then
+            seen[c] = true
+            list[#list + 1] = c
+        end
+    end
+    pcall(function()
+        local ctx = workspace:FindFirstChild("Contexts")
+        if not ctx then
+            return
+        end
+        add(getCurrentContext())
+        local lc = entitiesCache.lastCtx
+        if lc and lc.Parent == ctx then
+            add(lc)
+        end
+        local kids = ctx:GetChildren()
+        for i = #kids, 1, -1 do
+            if kids[i]:FindFirstChild("Entities") then
+                add(kids[i])
+            end
+        end
+        for i = #kids, 1, -1 do
+            add(kids[i])
+        end
+    end)
+    return list
 end
 
 local function contextMode()
@@ -879,6 +915,17 @@ local function entitiesHasObjects(folder)
 end
 
 local function getEntitiesFolder()
+    local own = entitiesCache.owned
+    if own then
+        local alive = false
+        pcall(function()
+            alive = own.Parent ~= nil and own:IsDescendantOf(workspace)
+        end)
+        if alive then
+            return own
+        end
+        entitiesCache.owned = nil
+    end
     if not entitiesCache.night then
         local ok, folder = pcall(function()
             return workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Entities")
@@ -929,6 +976,34 @@ local function getEntitiesFolder()
     entitiesCache.folder = best
     entitiesCache.at = os.clock()
     return best
+end
+
+local function allEntityFolders()
+    local list = {}
+    pcall(function()
+        local ctx = workspace:FindFirstChild("Contexts")
+        if ctx then
+            for _, c in ipairs(ctx:GetChildren()) do
+                local e = c:FindFirstChild("Entities")
+                if e then
+                    list[#list + 1] = e
+                end
+            end
+        end
+        for _, ch in ipairs(workspace:GetChildren()) do
+            if ch.Name == "Map" then
+                local e = ch:FindFirstChild("Entities")
+                if e then
+                    list[#list + 1] = e
+                end
+            end
+        end
+        local we = workspace:FindFirstChild("Entities")
+        if we then
+            list[#list + 1] = we
+        end
+    end)
+    return list
 end
 
 local function getEnemyHealth()
@@ -1232,26 +1307,38 @@ local function waitForGameStart(difficulty)
             if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
                 lastRestartAt = clockNow()
                 restartedAt = clockNow()
+                farmStatusText = "Game End | Restart"
                 pcall(function()
-                    local cur = contextMode() and getCurrentContext() or nil
-                    if cur then
-                        restartGame:InvokeServer(cur, false)
+                    local cands = contextMode() and contextCandidates() or {}
+                    if #cands > 0 then
+                        entitiesCache.rot = (entitiesCache.rot or 0) + 1
+                        restartGame:InvokeServer(cands[((entitiesCache.rot - 1) % #cands) + 1], false)
                     else
                         restartGame:InvokeServer()
                     end
                 end)
                 entitiesCache.at = -100
-                waitUntilHidden("GameGui.Screen.Middle.GameEnd")
+                local hw = clockNow()
+                while autoFarmEnabled and isVisible("GameGui.Screen.Middle.GameEnd") and clockNow() - hw < 8 do
+                    task.wait(0.25)
+                end
+                if not isVisible("GameGui.Screen.Middle.GameEnd") then
+                    entitiesCache.rot = 0
+                    entitiesCache.owned = nil
+                end
             end
         elseif isVisible("GameGui.Screen.Middle.DifficultyVote") then
             if contextMode() then
                 local nextVote = 0
+                local tries = 0
                 while autoFarmEnabled and isVisible("GameGui.Screen.Middle.DifficultyVote") do
                     if clockNow() >= nextVote then
                         nextVote = clockNow() + 3
+                        tries = tries + 1
                         farmStatusText = "Vote Difficulty"
                         pcall(function()
-                            local cur = getCurrentContext()
+                            local cands = contextCandidates()
+                            local cur = #cands > 0 and cands[((tries - 1) % #cands) + 1] or nil
                             if cur then
                                 placeDifficultyVote:InvokeServer(cur, difficulty)
                             else
@@ -1569,7 +1656,32 @@ local function currentFarmStatus()
     if not autoFarmEnabled then
         return "Auto farm off"
     end
-    return tostring(farmStatusText or "")
+    local main = tostring(farmStatusText or "")
+    if not entitiesCache.diag then
+        return main
+    end
+    local info = "?"
+    pcall(function()
+        local ctx = workspace:FindFirstChild("Contexts")
+        local nctx = ctx and #ctx:GetChildren() or 0
+        local f = getEntitiesFolder()
+        local fname = "none"
+        local units, enemies = 0, 0
+        if f then
+            local par = f.Parent
+            fname = par and tostring(par.Name):sub(1, 6) or "?"
+            for _, c in ipairs(f:GetChildren()) do
+                local n = tostring(c.Name)
+                if n:sub(1, 5) == "unit_" then
+                    units = units + 1
+                elseif n:sub(1, 6) == "enemy_" then
+                    enemies = enemies + 1
+                end
+            end
+        end
+        info = string.format("ctx=%d own=%s f=%s u=%d e=%d lp=%s c=%d n=%s", nctx, entitiesCache.owned and "Y" or "N", fname, units, enemies, tostring(entitiesCache.lastPlace), math.floor(getCashAmount()), entitiesCache.night and "Y" or "N")
+    end)
+    return main:sub(1, 70) .. " || " .. info
 end
 
 local function getRequestFunction()
@@ -3111,6 +3223,19 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
     task.wait(0.1 + math.random() * 0.35)
     local beforeNear = getUnitModelsNear(unit.name, placePos, PLACE_VERIFY_RADIUS)
     local beforeTotal = getUnitCountByName(unit.name)
+    local folders = allEntityFolders()
+    local beforeAll = {}
+    for _, f in ipairs(folders) do
+        local set = {}
+        pcall(function()
+            for _, m in ipairs(f:GetChildren()) do
+                if nameMatchesUnit(m.Name, unit.name) then
+                    set[m] = true
+                end
+            end
+        end)
+        beforeAll[f] = set
+    end
 
     local okInvoke, placeRet = pcall(function()
         return placeUnit:InvokeServer(unpack(args))
@@ -3118,15 +3243,53 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
     if okInvoke then
         rememberPlacedId(unit.name, placeRet)
     end
+    local short = tostring(unit.name):gsub("^unit_", "")
+    if not okInvoke then
+        entitiesCache.lastPlace = short .. ":error"
+    elseif placeRet == false then
+        entitiesCache.lastPlace = short .. ":rejected"
+    else
+        entitiesCache.lastPlace = short .. ":sent"
+    end
 
     for _ = 1, 20 do
         task.wait(0.08)
         if hasNewUnitNear(unit.name, placePos, PLACE_VERIFY_RADIUS, beforeNear) then
+            entitiesCache.lastPlace = short .. ":ok"
+            if contextMode() then
+                entitiesCache.owned = getEntitiesFolder()
+            end
             return true
         end
         if getUnitCountByName(unit.name) > beforeTotal then
+            entitiesCache.lastPlace = short .. ":ok"
             return true
         end
+        for _, f in ipairs(folders) do
+            local found = false
+            pcall(function()
+                for _, m in ipairs(f:GetChildren()) do
+                    if nameMatchesUnit(m.Name, unit.name) and not beforeAll[f][m] and m:IsA("Model") then
+                        local p2 = m:GetPivot().Position
+                        local dx, dz = p2.X - placePos.X, p2.Z - placePos.Z
+                        if math.sqrt(dx * dx + dz * dz) <= PLACE_VERIFY_RADIUS then
+                            found = true
+                            return
+                        end
+                    end
+                end
+            end)
+            if found then
+                entitiesCache.owned = f
+                entitiesCache.folder = f
+                entitiesCache.at = os.clock()
+                entitiesCache.lastPlace = short .. ":ok*"
+                return true
+            end
+        end
+    end
+    if entitiesCache.lastPlace == short .. ":sent" then
+        entitiesCache.lastPlace = short .. ":notfound"
     end
     return false
 end
@@ -4247,6 +4410,15 @@ TabSetting:AddToggle({
         else
             webhookEnabled = false
         end
+    end
+})
+
+TabSetting:AddToggle({
+    Name = "Send Debug To API",
+    Default = true,
+    Flag = "SendDebugToApi",
+    Callback = function(Value)
+        entitiesCache.diag = Value == true
     end
 })
 
