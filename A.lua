@@ -2,6 +2,9 @@ local redzlib = loadstring(game:HttpGet("https://raw.githubusercontent.com/nhat0
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+pcall(function()
+    math.randomseed(math.floor((tick() % 1000000) * 1000) + math.floor(os.clock() * 1000))
+end)
 local player = Players.LocalPlayer
 local LOBBY_PLACE_ID = 108533757090220
 local RADIOACTIVE_RAMPAGE_PLACE_ID = 123516946198836
@@ -837,13 +840,14 @@ local function getCurrentContext()
             best = lc
             return
         end
-        for _, c in ipairs(ctx:GetChildren()) do
-            if c:FindFirstChild("Entities") then
-                best = c
+        local kids = ctx:GetChildren()
+        for i = #kids, 1, -1 do
+            if kids[i]:FindFirstChild("Entities") then
+                best = kids[i]
                 return
             end
         end
-        best = ctx:GetChildren()[1]
+        best = kids[#kids]
     end)
     return best
 end
@@ -3089,13 +3093,9 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
         basePos = Vector3.new(unit.pos.X + offset[1], unit.pos.Y, unit.pos.Z + offset[2])
     end
     local placePos = jitterPos(basePos, minMag, maxMag)
-    local rotSpread = 0
-    if (tonumber(maxMag) or 0) > 0 then
-        rotSpread = math.max(1, math.floor((tonumber(maxMag) or 0) * 2))
-    end
     local rot = (defaultRotation or 180)
-    if rotSpread > 0 then
-        rot = rot + math.random(-rotSpread, rotSpread)
+    if (tonumber(maxMag) or 0) > 0 then
+        rot = rot + math.random(-2, 2)
     end
     local args = {
         [1] = unit.name,
@@ -3108,6 +3108,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
         }
     }
 
+    task.wait(0.1 + math.random() * 0.35)
     local beforeNear = getUnitModelsNear(unit.name, placePos, PLACE_VERIFY_RADIUS)
     local beforeTotal = getUnitCountByName(unit.name)
 
@@ -3181,7 +3182,7 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
         if not skipUnit and unit.price then
             local success = false
             local attempts = 0
-            local jMag = 0.1
+            local jMin, jMax = 0.05, 0.2
             local needCash = unit.price
             local offsetIndex = 1
             while autoFarmEnabled and inGameRef() and not success and attempts < maxAttempts do
@@ -3212,7 +3213,7 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
                     local beforeCash = getCashAmount()
                     attempts = attempts + 1
                     farmStatusText = string.format("Wave %d | Place Unit %s %d/%d", getWaveNumber(), eeUnitLabel(unit.name), placed + 1, limit)
-                    success = tryPlaceOne(unit, defaultAngle, defaultRotation, jMag, jMag, attempts, PLACE_OFFSETS[offsetIndex])
+                    success = tryPlaceOne(unit, defaultAngle, defaultRotation, jMin, jMax, attempts, PLACE_OFFSETS[offsetIndex])
                     if success then
                         if placedCounter then
                             placedCounter.value = placedCounter.value + 1
@@ -3222,10 +3223,11 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
                         jitterWait(0.12)
                     else
                         success = false
-                        local jFloor = jMag <= 0.0301
-                        jMag = math.max(0.03, jMag - 0.01)
+                        local jFloor = jMax <= 0.0601
+                        jMax = math.max(0.06, jMax - 0.02)
+                        jMin = math.min(0.05, jMax * 0.5)
                         if jFloor then
-                            jMag = 0.1
+                            jMin, jMax = 0.05, 0.2
                             offsetIndex = offsetIndex + 1
                         end
                         if offsetIndex > #PLACE_OFFSETS then
@@ -3303,14 +3305,18 @@ local function runFarmProfile(profile)
     end
 
     local function refreshPlacedFromWorld()
-        local world = countUnitsInPriceMap(priceMap)
-        if stageState.stage == 1 and world > placedCounter.value then
-            placedCounter.value = world
+        local world = stageState.stage == 1 and countUnitsInPriceMap(priceMap) or 0
+        if world > placedCounter.value then
+            return world
         end
         return placedCounter.value
     end
 
-    placedCounter.value = countUnitsInPriceMap(priceMap)
+    if getWaveNumber() <= 1 then
+        placedCounter.value = 0
+    else
+        placedCounter.value = countUnitsInPriceMap(priceMap)
+    end
 
     local function setUpgrade(ev, enabled)
         if not enabled then
