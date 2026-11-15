@@ -753,6 +753,154 @@ local function getStatIcons()
     return nil
 end
 
+local uiExtras = {cardSig = {}, cardChanged = {}, cardDump = {}, cardRoot = nil, cardScanAt = -100, cardWorks = false}
+
+uiExtras.imageId = function(obj)
+    local img = ""
+    pcall(function()
+        img = tostring(obj.Image or "")
+    end)
+    return tonumber(img:match("rbxassetid://(%d+)") or img:match("[?&]id=(%d+)") or img:match("^(%d+)$"))
+end
+
+uiExtras.shown = function(obj, stop)
+    local p = obj
+    while p and p ~= stop do
+        if p:IsA("GuiObject") and not p.Visible then
+            return false
+        end
+        p = p.Parent
+    end
+    return true
+end
+
+uiExtras.boosts = function()
+    local list, parts = {}, {}
+    pcall(function()
+        local holder = player.PlayerGui.GameGui.Screen.TopRight.BoostHolder
+        local items = {}
+        for _, b in ipairs(holder:GetChildren()) do
+            if b:IsA("GuiObject") and b.Visible then
+                local txt = ""
+                local amt = b:FindFirstChild("Amount")
+                if amt and (amt:IsA("TextLabel") or amt:IsA("TextButton")) and uiExtras.shown(amt, b) then
+                    txt = tostring(amt.Text or "")
+                else
+                    for _, d in ipairs(b:GetDescendants()) do
+                        if (d:IsA("TextLabel") or d:IsA("TextButton")) and uiExtras.shown(d, b) and tostring(d.Text or "") ~= "" then
+                            txt = tostring(d.Text)
+                            break
+                        end
+                    end
+                end
+                local id = uiExtras.imageId(b)
+                if not id then
+                    for _, d in ipairs(b:GetDescendants()) do
+                        if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Name ~= "Shadow" and uiExtras.shown(d, b) then
+                            id = uiExtras.imageId(d)
+                            if id then
+                                break
+                            end
+                        end
+                    end
+                end
+                if id or txt ~= "" then
+                    local x = 0
+                    pcall(function()
+                        x = b.AbsolutePosition.X
+                    end)
+                    items[#items + 1] = {x = x, o = b.LayoutOrder or 0, v = {n = tostring(b.Name):sub(1, 40), t = txt:sub(1, 16), i = id}}
+                end
+            end
+        end
+        table.sort(items, function(a, c)
+            if a.x ~= c.x then
+                return a.x < c.x
+            end
+            return a.o < c.o
+        end)
+        for _, it in ipairs(items) do
+            list[#list + 1] = it.v
+            parts[#parts + 1] = it.v.n .. "=" .. it.v.t .. "@" .. tostring(it.v.i)
+        end
+    end)
+    return list, table.concat(parts, ",")
+end
+
+uiExtras.cards = function()
+    local r = uiExtras.cardRoot
+    if r and r.Parent then
+        return r
+    end
+    if tick() - uiExtras.cardScanAt < 3 then
+        return nil
+    end
+    uiExtras.cardScanAt = tick()
+    r = nil
+    pcall(function()
+        r = player.PlayerGui.GameGui.Screen.Right.UnitAbilities.UnitAbilities.Cards
+    end)
+    if not r then
+        pcall(function()
+            for _, d in ipairs(player.PlayerGui:GetDescendants()) do
+                if d.Name == "Cards" and d.Parent and d.Parent.Name == "UnitAbilities" then
+                    r = d
+                    break
+                end
+            end
+        end)
+    end
+    uiExtras.cardRoot = r
+    return r
+end
+
+uiExtras.cardReady = function(id)
+    local root = uiExtras.cards()
+    if not root then
+        return nil
+    end
+    local card = root:FindFirstChild(tostring(id))
+    if not card then
+        return nil
+    end
+    local nums, dump, readyWord = {}, {}, false
+    pcall(function()
+        for _, d in ipairs(card:GetDescendants()) do
+            if (d:IsA("TextLabel") or d:IsA("TextButton")) and uiExtras.shown(d, card) then
+                local txt = tostring(d.Text or "")
+                if txt ~= "" then
+                    dump[#dump + 1] = txt
+                    local tl = string.lower(txt)
+                    if tl:find("ready", 1, true) or tl:find("sẵn sàng", 1, true) then
+                        readyWord = true
+                    end
+                    if txt:find("%d") then
+                        nums[#nums + 1] = tostring(d.Name) .. "=" .. txt
+                    end
+                end
+            end
+        end
+    end)
+    local key = tostring(id)
+    local sig = table.concat(nums, ";")
+    local now = tick()
+    if uiExtras.cardSig[key] ~= sig then
+        if uiExtras.cardSig[key] ~= nil then
+            uiExtras.cardChanged[key] = now
+        end
+        uiExtras.cardSig[key] = sig
+    end
+    uiExtras.cardDump[key] = table.concat(dump, "/")
+    if readyWord or sig == "" then
+        return true
+    end
+    if now - (uiExtras.cardChanged[key] or -100) <= 2.5 then
+        uiExtras.cardWorks = true
+        return false
+    end
+    return true
+end
+
 local function collectStats()
     local stats = {}
     local keys = {}
@@ -771,6 +919,8 @@ local function collectStats()
     for _, k in ipairs(keys) do
         parts[#parts + 1] = k .. "=" .. tostring(stats[k])
     end
+    local _, bsig = uiExtras.boosts()
+    parts[#parts + 1] = "B:" .. bsig
     return stats, table.concat(parts, "|")
 end
 
@@ -1686,12 +1836,23 @@ local function currentFarmStatus()
                 end
             end
         end
-        info = string.format("ctx=%d own=%s f=%s u=%d e=%d lp=%s c=%d n=%s", nctx, entitiesCache.owned and "Y" or "N", fname, units, enemies, tostring(entitiesCache.lastPlace), math.floor(getCashAmount()), entitiesCache.night and "Y" or "N")
+        info = string.format("ctx=%d own=%s u=%d e=%d lp=%s c=%d", nctx, entitiesCache.owned and "Y" or "N", units, enemies, tostring(entitiesCache.lastPlace):sub(1, 16), math.floor(getCashAmount()))
         if entitiesCache.skipWhy then
             info = info .. " sk=" .. tostring(entitiesCache.skipWhy)
         end
         if entitiesCache.jockeyInfo then
             info = info .. " jk=" .. tostring(entitiesCache.jockeyInfo)
+        end
+        if entitiesCache.cardInfo then
+            info = info .. " rd=" .. tostring(entitiesCache.cardInfo)
+            if math.floor(tick() / 20) % 2 == 1 then
+                local dl = {}
+                for k, v in pairs(uiExtras.cardDump) do
+                    dl[#dl + 1] = k .. ":" .. tostring(v):sub(1, 24)
+                end
+                table.sort(dl)
+                info = "cd " .. table.concat(dl, " ")
+            end
         end
     end)
     return main:sub(1, 70) .. " || " .. info
@@ -1824,6 +1985,8 @@ local function performSync(kind, stats, sig)
             if icons then
                 payload.icons = icons
             end
+            local boosts = uiExtras.boosts()
+            payload.boosts = boosts
             pcall(function()
                 payload.userId = player.UserId
                 payload.displayName = tostring(player.DisplayName)
@@ -3653,6 +3816,7 @@ local function runFarmProfile(profile)
     entitiesCache.night = profile.Night == true
     entitiesCache.skipWhy = nil
     entitiesCache.jockeyInfo = nil
+    entitiesCache.cardInfo = nil
     entitiesCache.at = -100
     waitForGameStart(difficulty)
     entitiesCache.at = -100
@@ -3746,7 +3910,7 @@ local function runFarmProfile(profile)
         end, clockNow)
     end)
 
-    local spawnTrack = {wave = -1, bursts = 0, lastAdd = nil, jockeyWave = false, seen = setmetatable({}, {__mode = "k"}), pending = setmetatable({}, {__mode = "k"}), alive = setmetatable({}, {__mode = "k"}), lastJockeyAdd = -100, used = {}, fired = 0}
+    local spawnTrack = {wave = -1, bursts = 0, lastAdd = nil, jockeyWave = false, seen = setmetatable({}, {__mode = "k"}), pending = setmetatable({}, {__mode = "k"}), alive = setmetatable({}, {__mode = "k"}), lastJockeyAdd = -100, used = {}, fired = 0, need = 0, awaiting = {}}
     task.spawn(function()
         local srT = type(profile.SkipRules) == "table" and profile.SkipRules or {}
         local gap = tonumber(srT.BurstGap) or 3
@@ -3786,7 +3950,7 @@ local function runFarmProfile(profile)
                         end
                     end
                 end
-                entitiesCache.jockeyInfo = string.format("b%d%s f%d", spawnTrack.bursts, spawnTrack.jockeyWave and "J" or "", spawnTrack.fired)
+                entitiesCache.jockeyInfo = string.format("b%d%s f%d n%d", spawnTrack.bursts, spawnTrack.jockeyWave and "J" or "", spawnTrack.fired, spawnTrack.need)
             end)
             task.wait(0.2)
         end
@@ -4353,45 +4517,79 @@ local function runFarmProfile(profile)
                                 end
                             end)
                         end
+                        local readyMap = {}
+                        local rdText = {}
+                        for _, id in ipairs(ids) do
+                            local r = uiExtras.cardReady(id)
+                            readyMap[id] = r
+                            rdText[#rdText + 1] = r == nil and "?" or (r and "R" or "C")
+                        end
+                        if #ids > 0 then
+                            entitiesCache.cardInfo = table.concat(rdText, "")
+                        end
                         if jk and #ids > 0 then
                             local alive = 0
-                            for m in pairs(spawnTrack.pending) do
+                            for m in pairs(spawnTrack.alive) do
                                 if m.Parent then
                                     alive = alive + 1
+                                else
+                                    spawnTrack.alive[m] = nil
+                                end
+                            end
+                            local pend = false
+                            for m in pairs(spawnTrack.pending) do
+                                if m.Parent then
+                                    pend = true
                                 else
                                     spawnTrack.pending[m] = nil
                                 end
                             end
-                            if alive > 0 then
-                                trig = false
-                                if now - spawnTrack.lastJockeyAdd >= (tonumber(jk.Settle) or 1.5) then
-                                    table.sort(ids, function(a, b)
-                                        return (spawnTrack.used[a] or -1e9) < (spawnTrack.used[b] or -1e9)
-                                    end)
-                                    for i = 1, math.min(#ids, tonumber(jk.Use) or 2) do
-                                        local id = ids[i]
-                                        spawnTrack.used[id] = now
-                                        pcall(function()
-                                            activateUnitAbility:InvokeServer(id)
-                                        end)
+                            if pend and now - spawnTrack.lastJockeyAdd >= (tonumber(jk.Settle) or 1.5) then
+                                for m in pairs(spawnTrack.pending) do
+                                    spawnTrack.pending[m] = nil
+                                end
+                                pend = false
+                                spawnTrack.need = math.min(#ids, tonumber(jk.Use) or 2)
+                            end
+                            if alive == 0 then
+                                spawnTrack.need = 0
+                            end
+                            for id, at in pairs(spawnTrack.awaiting) do
+                                if readyMap[id] == false then
+                                    spawnTrack.awaiting[id] = nil
+                                elseif now - at > 2 then
+                                    spawnTrack.awaiting[id] = nil
+                                    if alive > 0 then
+                                        spawnTrack.need = spawnTrack.need + 1
                                     end
+                                end
+                            end
+                            if spawnTrack.need > 0 then
+                                local cand = {}
+                                for _, id in ipairs(ids) do
+                                    if readyMap[id] ~= false and not spawnTrack.awaiting[id] then
+                                        cand[#cand + 1] = id
+                                    end
+                                end
+                                table.sort(cand, function(a, b)
+                                    return (spawnTrack.used[a] or -1e9) < (spawnTrack.used[b] or -1e9)
+                                end)
+                                for i = 1, math.min(spawnTrack.need, #cand) do
+                                    local id = cand[i]
+                                    spawnTrack.used[id] = now
+                                    spawnTrack.need = spawnTrack.need - 1
                                     spawnTrack.fired = spawnTrack.fired + 1
-                                    for m in pairs(spawnTrack.pending) do
-                                        spawnTrack.pending[m] = nil
+                                    if uiExtras.cardWorks then
+                                        spawnTrack.awaiting[id] = now
                                     end
-                                    lastFire[unitName] = now
+                                    pcall(function()
+                                        activateUnitAbility:InvokeServer(id)
+                                    end)
                                 end
-                            else
-                                for m in pairs(spawnTrack.alive) do
-                                    if m.Parent then
-                                        trig = false
-                                    else
-                                        spawnTrack.alive[m] = nil
-                                    end
-                                end
-                                if spawnTrack.jockeyWave then
-                                    trig = false
-                                end
+                                lastFire[unitName] = now
+                            end
+                            if alive > 0 or pend or spawnTrack.jockeyWave then
+                                trig = false
                             end
                         end
                         if trig and not spamNow and type(ab.Trigger) == "table" and tonumber(ab.Trigger.UntilWave) and getWaveNumber() > tonumber(ab.Trigger.UntilWave) then
@@ -4403,10 +4601,12 @@ local function runFarmProfile(profile)
                         if trig and #ids > 0 and (not lastFire[unitName] or now - lastFire[unitName] >= interval) then
                             lastFire[unitName] = now
                             for _, id in ipairs(ids) do
-                                spawnTrack.used[id] = now
-                                pcall(function()
-                                    activateUnitAbility:InvokeServer(id)
-                                end)
+                                if readyMap[id] ~= false then
+                                    spawnTrack.used[id] = now
+                                    pcall(function()
+                                        activateUnitAbility:InvokeServer(id)
+                                    end)
+                                end
                             end
                         end
                         local idText = {}
