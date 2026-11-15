@@ -874,7 +874,7 @@ uiExtras.cardReady = function(id)
                     if tl:find("ready", 1, true) or tl:find("sẵn sàng", 1, true) then
                         readyWord = true
                     end
-                    if txt:find("%d") then
+                    if txt:find("%d") and not txt:match("^%s*#%s*%d+%s*$") then
                         nums[#nums + 1] = tostring(d.Name) .. "=" .. txt
                     end
                 end
@@ -3135,6 +3135,9 @@ local GG5N = {
                 SkipRules = {
                     FromWave = 31,
                     ForceWaves = {31, 32, 34, 35, 38},
+                    ForceJockeyLimit = {
+                        {Wave = 34, Max = 2},
+                    },
                     MaxTotalHP = 1000000,
                     FewEnemies = 3,
                     FewMaxHP = 2000000,
@@ -3176,6 +3179,9 @@ local GG5N = {
                             Enemy = "enemy_jockey",
                             Settle = 1.5,
                             Use = 2,
+                        },
+                        TimedUse = {
+                            {Wave = 36, Delay = 8, Use = 2},
                         },
                     },
                 },
@@ -3910,7 +3916,7 @@ local function runFarmProfile(profile)
         end, clockNow)
     end)
 
-    local spawnTrack = {wave = -1, bursts = 0, lastAdd = nil, jockeyWave = false, seen = setmetatable({}, {__mode = "k"}), pending = setmetatable({}, {__mode = "k"}), alive = setmetatable({}, {__mode = "k"}), lastJockeyAdd = -100, used = {}, fired = 0, need = 0, awaiting = {}}
+    local spawnTrack = {wave = -1, bursts = 0, lastAdd = nil, jockeyWave = false, seen = setmetatable({}, {__mode = "k"}), pending = setmetatable({}, {__mode = "k"}), alive = setmetatable({}, {__mode = "k"}), lastJockeyAdd = -100, used = {}, fired = 0, need = 0, awaiting = {}, waveAt = clockNow(), timedWave = -1, timedUntil = 0}
     task.spawn(function()
         local srT = type(profile.SkipRules) == "table" and profile.SkipRules or {}
         local gap = tonumber(srT.BurstGap) or 3
@@ -3927,6 +3933,7 @@ local function runFarmProfile(profile)
                 if w ~= spawnTrack.wave then
                     local recent = spawnTrack.lastAdd ~= nil and now - spawnTrack.lastAdd < 1
                     spawnTrack.wave = w
+                    spawnTrack.waveAt = now
                     spawnTrack.bursts = recent and 1 or 0
                     spawnTrack.lastAdd = recent and spawnTrack.lastAdd or nil
                     spawnTrack.jockeyWave = recent and now - spawnTrack.lastJockeyAdd < 1
@@ -4000,13 +4007,14 @@ local function runFarmProfile(profile)
                         local dir = (slowZ and towardZ and towardZ - slowZ < 0) and -1 or 1
                         local slowX = tonumber(sr.SlowX)
                         local dirX = (slowX and tonumber(sr.TowardX) and tonumber(sr.TowardX) - slowX < 0) and -1 or 1
-                        local enemies, blocked, allSlow, allSlowX = 0, false, true, true
+                        local enemies, blocked, allSlow, allSlowX, jockeys = 0, false, true, true, 0
                         for _, m in ipairs(folder and folder:GetChildren() or {}) do
                             local n = string.lower(tostring(m.Name))
                             if n:sub(1, 6) == "enemy_" then
                                 enemies = enemies + 1
                                 if block ~= "" and n:sub(1, #block) == block then
                                     blocked = true
+                                    jockeys = jockeys + 1
                                 end
                                 local okP, pos = pcall(function()
                                     return m:GetPivot().Position
@@ -4027,6 +4035,12 @@ local function runFarmProfile(profile)
                         end
                         if sr.LockWaveOnBlock and spawnTrack.jockeyWave then
                             blocked = true
+                        end
+                        for _, fl in ipairs(type(sr.ForceJockeyLimit) == "table" and sr.ForceJockeyLimit or {}) do
+                            if tonumber(fl.Wave) == w then
+                                forced = true
+                                blocked = jockeys > (tonumber(fl.Max) or 2)
+                            end
                         end
                         local minB = tonumber(sr.MinBursts) or 0
                         if blocked then
@@ -4527,6 +4541,18 @@ local function runFarmProfile(profile)
                         if #ids > 0 then
                             entitiesCache.cardInfo = table.concat(rdText, "")
                         end
+                        local tu = nil
+                        local curWave = getWaveNumber()
+                        for _, x in ipairs(type(ab.TimedUse) == "table" and ab.TimedUse or {}) do
+                            if tonumber(x.Wave) == curWave then
+                                tu = x
+                            end
+                        end
+                        if tu and #ids > 0 and spawnTrack.timedWave ~= curWave and now - spawnTrack.waveAt >= (tonumber(tu.Delay) or 8) then
+                            spawnTrack.timedWave = curWave
+                            spawnTrack.need = math.min(#ids, tonumber(tu.Use) or 2)
+                            spawnTrack.timedUntil = now + (tonumber(tu.Retry) or 15)
+                        end
                         if jk and #ids > 0 then
                             local alive = 0
                             for m in pairs(spawnTrack.alive) do
@@ -4549,9 +4575,15 @@ local function runFarmProfile(profile)
                                     spawnTrack.pending[m] = nil
                                 end
                                 pend = false
-                                spawnTrack.need = math.min(#ids, tonumber(jk.Use) or 2)
+                                if not tu then
+                                    spawnTrack.need = math.min(#ids, tonumber(jk.Use) or 2)
+                                end
                             end
-                            if alive == 0 then
+                            if tu then
+                                if now > spawnTrack.timedUntil then
+                                    spawnTrack.need = 0
+                                end
+                            elseif alive == 0 then
                                 spawnTrack.need = 0
                             end
                             for id, at in pairs(spawnTrack.awaiting) do
@@ -4559,7 +4591,7 @@ local function runFarmProfile(profile)
                                     spawnTrack.awaiting[id] = nil
                                 elseif now - at > 2 then
                                     spawnTrack.awaiting[id] = nil
-                                    if alive > 0 then
+                                    if alive > 0 or (tu and now <= spawnTrack.timedUntil) then
                                         spawnTrack.need = spawnTrack.need + 1
                                     end
                                 end
