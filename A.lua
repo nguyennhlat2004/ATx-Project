@@ -1845,7 +1845,7 @@ local function currentFarmStatus()
         end
         if entitiesCache.cardInfo then
             info = info .. " rd=" .. tostring(entitiesCache.cardInfo)
-            if math.floor(tick() / 20) % 2 == 1 then
+            if math.floor(tick() / 20) % 3 == 1 then
                 local dl = {}
                 for k, v in pairs(uiExtras.cardDump) do
                     dl[#dl + 1] = k .. ":" .. tostring(v):sub(1, 24)
@@ -1853,6 +1853,13 @@ local function currentFarmStatus()
                 table.sort(dl)
                 info = "cd " .. table.concat(dl, " ")
             end
+        end
+        if math.floor(tick() / 20) % 3 == 2 and type(entitiesCache.plog) == "table" and #entitiesCache.plog > 0 then
+            local pl = {}
+            for _, x in ipairs(entitiesCache.plog) do
+                pl[#pl + 1] = string.format("%s%d-%s n%d r%d c%d", tostring(x.k), tonumber(x.s) or 0, x.e and tostring(x.e) or "?", tonumber(x.n) or 0, tonumber(x.r) or 0, math.floor(tonumber(x.c) or 0))
+            end
+            info = "pl " .. table.concat(pl, ",")
         end
     end)
     return main:sub(1, 70) .. " || " .. info
@@ -3181,7 +3188,7 @@ local GG5N = {
                             Use = 2,
                         },
                         TimedUse = {
-                            {Wave = 36, Delay = 8, Use = 2},
+                            {Wave = 36, Delay = 8, Use = 1},
                         },
                     },
                 },
@@ -3746,6 +3753,9 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
                     if softFail and cashWait >= maxCashWait then break end
                     task.wait(0.5)
                     cashWait = cashWait + 0.5
+                    if entitiesCache.plCur then
+                        entitiesCache.plCur.c = entitiesCache.plCur.c + 0.5
+                    end
                     if not softFail and cashWait > maxCashWait then break end
                 end
 
@@ -3768,6 +3778,9 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
                         jitterWait(0.12)
                     else
                         success = false
+                        if entitiesCache.plCur then
+                            entitiesCache.plCur.r = entitiesCache.plCur.r + 1
+                        end
                         local jFloor = jMax <= 0.0601
                         jMax = math.max(0.06, jMax - 0.02)
                         jMin = math.min(0.05, jMax * 0.5)
@@ -3823,6 +3836,8 @@ local function runFarmProfile(profile)
     entitiesCache.skipWhy = nil
     entitiesCache.jockeyInfo = nil
     entitiesCache.cardInfo = nil
+    entitiesCache.plog = {}
+    entitiesCache.plCur = nil
     entitiesCache.at = -100
     waitForGameStart(difficulty)
     entitiesCache.at = -100
@@ -4179,6 +4194,9 @@ local function runFarmProfile(profile)
             upgradeState.pause = true
         end
         isPlacing.value = true
+        entitiesCache.plCur = {k = tostring(units[1].name or "?"):gsub("^unit_", ""):sub(1, 2), s = getWaveNumber(), r = 0, c = 0, n = 0}
+        entitiesCache.plog = entitiesCache.plog or {}
+        table.insert(entitiesCache.plog, entitiesCache.plCur)
 
         local okPlace, got = pcall(function()
             task.wait(0.2)
@@ -4227,6 +4245,11 @@ local function runFarmProfile(profile)
         end
 
         isPlacing.value = false
+        if entitiesCache.plCur then
+            entitiesCache.plCur.e = getWaveNumber()
+            entitiesCache.plCur.n = got
+            entitiesCache.plCur = nil
+        end
         if pauseUpgrade then
             upgradeState.pause = false
         end
