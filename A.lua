@@ -2971,7 +2971,10 @@ local GG5N = {
                 },
                 SkipRules = {
                     FromWave = 31,
-                    MaxTotalHP = 500000,
+                    ForceWaves = {31, 32, 34, 35, 38},
+                    MaxTotalHP = 1000000,
+                    FewEnemies = 3,
+                    FewMaxHP = 2000000,
                     BlockEnemy = "enemy_jockey",
                     LockWaveOnBlock = true,
                     MinBursts = 2,
@@ -2979,6 +2982,8 @@ local GG5N = {
                     Settle = 1.5,
                     SlowZ = -199.818,
                     TowardZ = -145.56,
+                    SlowX = -892.286,
+                    TowardX = -846.80,
                 },
                 BossSell = {
                     Wave = 40,
@@ -2991,6 +2996,7 @@ local GG5N = {
                     {
                         Unit = "unit_venom_plant",
                         Interval = 1,
+                        SpamFromWave = 39,
                         Trigger = {
                             Ref = "unit_trithorn",
                             RefPos = {-846.80, 61.93, -165.55},
@@ -3828,7 +3834,9 @@ local function runFarmProfile(profile)
                         local slowZ = tonumber(sr.SlowZ)
                         local towardZ = tonumber(sr.TowardZ)
                         local dir = (slowZ and towardZ and towardZ - slowZ < 0) and -1 or 1
-                        local enemies, blocked, allSlow = 0, false, true
+                        local slowX = tonumber(sr.SlowX)
+                        local dirX = (slowX and tonumber(sr.TowardX) and tonumber(sr.TowardX) - slowX < 0) and -1 or 1
+                        local enemies, blocked, allSlow, allSlowX = 0, false, true, true
                         for _, m in ipairs(folder and folder:GetChildren() or {}) do
                             local n = string.lower(tostring(m.Name))
                             if n:sub(1, 6) == "enemy_" then
@@ -3836,14 +3844,21 @@ local function runFarmProfile(profile)
                                 if block ~= "" and n:sub(1, #block) == block then
                                     blocked = true
                                 end
-                                if slowZ then
-                                    local okP, pos = pcall(function()
-                                        return m:GetPivot().Position
-                                    end)
-                                    if not okP or not pos or dir * (pos.Z - slowZ) >= 0 then
-                                        allSlow = false
-                                    end
+                                local okP, pos = pcall(function()
+                                    return m:GetPivot().Position
+                                end)
+                                if not okP or not pos or (slowZ and dir * (pos.Z - slowZ) >= 0) then
+                                    allSlow = false
                                 end
+                                if not okP or not pos or (slowX and dirX * (pos.X - slowX) >= 0) then
+                                    allSlowX = false
+                                end
+                            end
+                        end
+                        local forced = false
+                        for _, fw in ipairs(type(sr.ForceWaves) == "table" and sr.ForceWaves or {}) do
+                            if tonumber(fw) == w then
+                                forced = true
                             end
                         end
                         if sr.LockWaveOnBlock and spawnTrack.jockeyWave then
@@ -3852,16 +3867,26 @@ local function runFarmProfile(profile)
                         local minB = tonumber(sr.MinBursts) or 0
                         if blocked then
                             why = "Jockey"
+                        elseif forced then
+                            doSkip = true
+                            why = "Force"
                         elseif minB > 0 and (spawnTrack.bursts < minB or not spawnTrack.lastAdd or clockNow() - spawnTrack.lastAdd < (tonumber(sr.Settle) or 1.5)) then
                             why = "Burst" .. tostring(spawnTrack.bursts)
                         elseif slowZ and enemies > 0 and allSlow then
                             doSkip = true
                             why = "Slow"
+                        elseif slowX and enemies > 0 and allSlowX then
+                            doSkip = true
+                            why = "SlowX"
                         else
                             local info = getEnemyHealth()
-                            if (tonumber(info.hp) or 0) < (tonumber(sr.MaxTotalHP) or 500000) then
+                            local hpNow = tonumber(info.hp) or 0
+                            if hpNow < (tonumber(sr.MaxTotalHP) or 500000) then
                                 doSkip = true
                                 why = "HP"
+                            elseif tonumber(sr.FewEnemies) and enemies <= tonumber(sr.FewEnemies) and hpNow < (tonumber(sr.FewMaxHP) or 0) then
+                                doSkip = true
+                                why = "HPFew"
                             else
                                 why = "HP " .. tostring(math.floor((tonumber(info.hp) or 0) / 1000)) .. "k"
                             end
@@ -4314,7 +4339,20 @@ local function runFarmProfile(profile)
                         local interval = tonumber(ab.Interval or ab.interval) or 2
                         local now = clockNow()
                         local trig = true
-                        local jk = type(ab.Jockey) == "table" and ab.Jockey or nil
+                        local spamNow = tonumber(ab.SpamFromWave) ~= nil and getWaveNumber() >= tonumber(ab.SpamFromWave)
+                        local jk = (not spamNow) and type(ab.Jockey) == "table" and ab.Jockey or nil
+                        if spamNow then
+                            trig = false
+                            pcall(function()
+                                local folder = getEntitiesFolder()
+                                for _, m in ipairs(folder and folder:GetChildren() or {}) do
+                                    if string.lower(tostring(m.Name)):sub(1, 6) == "enemy_" then
+                                        trig = true
+                                        break
+                                    end
+                                end
+                            end)
+                        end
                         if jk and #ids > 0 then
                             local alive = 0
                             for m in pairs(spawnTrack.pending) do
@@ -4356,10 +4394,10 @@ local function runFarmProfile(profile)
                                 end
                             end
                         end
-                        if trig and type(ab.Trigger) == "table" and tonumber(ab.Trigger.UntilWave) and getWaveNumber() > tonumber(ab.Trigger.UntilWave) then
+                        if trig and not spamNow and type(ab.Trigger) == "table" and tonumber(ab.Trigger.UntilWave) and getWaveNumber() > tonumber(ab.Trigger.UntilWave) then
                             trig = false
                         end
-                        if trig and type(ab.Trigger) == "table" and #ids > 0 then
+                        if trig and not spamNow and type(ab.Trigger) == "table" and #ids > 0 then
                             trig = abilityTriggerMet(ab.Trigger)
                         end
                         if trig and #ids > 0 and (not lastFire[unitName] or now - lastFire[unitName] >= interval) then
