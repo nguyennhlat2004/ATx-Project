@@ -1690,6 +1690,9 @@ local function currentFarmStatus()
         if entitiesCache.skipWhy then
             info = info .. " sk=" .. tostring(entitiesCache.skipWhy)
         end
+        if entitiesCache.jockeyInfo then
+            info = info .. " jk=" .. tostring(entitiesCache.jockeyInfo)
+        end
     end)
     return main:sub(1, 70) .. " || " .. info
 end
@@ -2962,10 +2965,18 @@ local GG5N = {
                 DefaultAngle = {-math.pi, 0, -math.pi},
                 DefaultRotation = 180,
                 Night = true,
+                AutoSkipOff = {
+                    {FromWave = 28, ToWave = 28},
+                    {FromWave = 36, ToWave = 37},
+                },
                 SkipRules = {
                     FromWave = 31,
                     MaxTotalHP = 500000,
                     BlockEnemy = "enemy_jockey",
+                    LockWaveOnBlock = true,
+                    MinBursts = 2,
+                    BurstGap = 3,
+                    Settle = 1.5,
                     SlowZ = -199.818,
                     TowardZ = -145.56,
                 },
@@ -2987,7 +2998,15 @@ local GG5N = {
                             ZBand = 15,
                             PassZ = true,
                             TowardZ = -145.56,
+                            PassX = -900.845,
+                            TowardX = -846.80,
+                            UntilWave = 27,
                             Window = 2,
+                        },
+                        Jockey = {
+                            Enemy = "enemy_jockey",
+                            Settle = 1.5,
+                            Use = 2,
                         },
                     },
                 },
@@ -3062,31 +3081,12 @@ local GG5N = {
                     },
                     {
                         Type = "WaitWave",
-                        Wave = 25,
+                        Wave = 23,
                     },
                     {
                         Type = "StartPlace",
-                        Name = "Place4_MetalBloom",
-                        HardCap = 7,
-                        MaxCount = 1,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_metal_bloom", pos = {-853.41, 61.93, -154.66}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 31,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place5_Venom",
-                        HardCap = 10,
+                        Name = "Place4_Venom",
+                        HardCap = 9,
                         MaxCount = 3,
                         SoftFail = false,
                         MaxAttempts = 80,
@@ -3098,6 +3098,25 @@ local GG5N = {
                             {name = "unit_venom_plant", pos = {-848.08, 61.93, -159.65}},
                             {name = "unit_venom_plant", pos = {-853.88, 61.93, -160.81}},
                             {name = "unit_venom_plant", pos = {-847.82, 61.93, -152.89}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 27,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place5_MetalBloom",
+                        HardCap = 10,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_metal_bloom", pos = {-853.41, 61.93, -154.66}},
                         },
                     },
                 },
@@ -3627,6 +3646,7 @@ local function runFarmProfile(profile)
 
     entitiesCache.night = profile.Night == true
     entitiesCache.skipWhy = nil
+    entitiesCache.jockeyInfo = nil
     entitiesCache.at = -100
     waitForGameStart(difficulty)
     entitiesCache.at = -100
@@ -3720,6 +3740,52 @@ local function runFarmProfile(profile)
         end, clockNow)
     end)
 
+    local spawnTrack = {wave = -1, bursts = 0, lastAdd = nil, jockeyWave = false, seen = setmetatable({}, {__mode = "k"}), pending = setmetatable({}, {__mode = "k"}), alive = setmetatable({}, {__mode = "k"}), lastJockeyAdd = -100, used = {}, fired = 0}
+    task.spawn(function()
+        local srT = type(profile.SkipRules) == "table" and profile.SkipRules or {}
+        local gap = tonumber(srT.BurstGap) or 3
+        local block = string.lower(tostring(srT.BlockEnemy or "enemy_jockey"))
+        for _, ab in ipairs(type(profile.Abilities) == "table" and profile.Abilities or {}) do
+            if type(ab.Jockey) == "table" and ab.Jockey.Enemy then
+                block = string.lower(tostring(ab.Jockey.Enemy))
+            end
+        end
+        while autoFarmEnabled and inGame do
+            pcall(function()
+                local w = getWaveNumber()
+                local now = clockNow()
+                if w ~= spawnTrack.wave then
+                    local recent = spawnTrack.lastAdd ~= nil and now - spawnTrack.lastAdd < 1
+                    spawnTrack.wave = w
+                    spawnTrack.bursts = recent and 1 or 0
+                    spawnTrack.lastAdd = recent and spawnTrack.lastAdd or nil
+                    spawnTrack.jockeyWave = recent and now - spawnTrack.lastJockeyAdd < 1
+                end
+                local folder = getEntitiesFolder()
+                for _, m in ipairs(folder and folder:GetChildren() or {}) do
+                    if not spawnTrack.seen[m] then
+                        spawnTrack.seen[m] = true
+                        local n = string.lower(tostring(m.Name))
+                        if n:sub(1, 6) == "enemy_" then
+                            if not spawnTrack.lastAdd or now - spawnTrack.lastAdd >= gap then
+                                spawnTrack.bursts = spawnTrack.bursts + 1
+                            end
+                            spawnTrack.lastAdd = now
+                            if block ~= "" and n:sub(1, #block) == block then
+                                spawnTrack.jockeyWave = true
+                                spawnTrack.pending[m] = true
+                                spawnTrack.alive[m] = true
+                                spawnTrack.lastJockeyAdd = now
+                            end
+                        end
+                    end
+                end
+                entitiesCache.jockeyInfo = string.format("b%d%s f%d", spawnTrack.bursts, spawnTrack.jockeyWave and "J" or "", spawnTrack.fired)
+            end)
+            task.wait(0.2)
+        end
+    end)
+
     task.spawn(function()
         local stopSkipAt = tonumber(profile.StopAutoSkipAtWave)
         local offWins = type(profile.AutoSkipOff) == "table" and profile.AutoSkipOff or {}
@@ -3728,9 +3794,11 @@ local function runFarmProfile(profile)
             if autoSkipEnabled then
                 local w = getWaveNumber()
                 local off = stopSkipAt ~= nil and w >= stopSkipAt
+                local winOff = false
                 for _, o in ipairs(offWins) do
                     if w >= (tonumber(o.FromWave) or 0) and w <= (tonumber(o.ToWave) or math.huge) then
                         off = true
+                        winOff = true
                     end
                 end
                 local hp = type(profile.HPSkip) == "table" and profile.HPSkip or nil
@@ -3739,9 +3807,12 @@ local function runFarmProfile(profile)
                     off = true
                 end
                 local sr = type(profile.SkipRules) == "table" and profile.SkipRules or nil
-                local ruleMode = sr ~= nil and w >= (tonumber(sr.FromWave) or math.huge)
+                local ruleMode = sr ~= nil and w >= (tonumber(sr.FromWave) or math.huge) and not winOff
                 if ruleMode then
                     off = true
+                end
+                if sr ~= nil and winOff then
+                    entitiesCache.skipWhy = "Off"
                 end
                 if off ~= wasOff then
                     wasOff = off
@@ -3775,8 +3846,14 @@ local function runFarmProfile(profile)
                                 end
                             end
                         end
+                        if sr.LockWaveOnBlock and spawnTrack.jockeyWave then
+                            blocked = true
+                        end
+                        local minB = tonumber(sr.MinBursts) or 0
                         if blocked then
                             why = "Jockey"
+                        elseif minB > 0 and (spawnTrack.bursts < minB or not spawnTrack.lastAdd or clockNow() - spawnTrack.lastAdd < (tonumber(sr.Settle) or 1.5)) then
+                            why = "Burst" .. tostring(spawnTrack.bursts)
                         elseif slowZ and enemies > 0 and allSlow then
                             doSkip = true
                             why = "Slow"
@@ -4178,6 +4255,11 @@ local function runFarmProfile(profile)
         local band = tonumber(cfg.ZBand) or 15
         local towardZ = tonumber(cfg.TowardZ)
         local dir = towardZ and ((towardZ - ref.Z) >= 0 and 1 or -1) or nil
+        local passX = tonumber(cfg.PassX)
+        local dirX = passX and (((tonumber(cfg.TowardX) or ref.X) - passX) >= 0 and 1 or -1) or 1
+        local function xOk(p)
+            return passX == nil or dirX * (p.X - passX) >= 0
+        end
         local event = false
         pcall(function()
             for _, m in ipairs(folder:GetChildren()) do
@@ -4186,13 +4268,13 @@ local function runFarmProfile(profile)
                     local pos = m:GetPivot().Position
                     local st = enemyState[m]
                     if not st then
-                        st = {firstZ = pos.Z, near = math.abs(pos.X - ref.X) <= maxDX and math.abs(pos.Z - ref.Z) <= band, crossed = false}
+                        st = {firstZ = pos.Z, near = math.abs(pos.X - ref.X) <= maxDX and math.abs(pos.Z - ref.Z) <= band and xOk(pos), crossed = false}
                         if dir then
-                            st.crossed = dir * (pos.Z - ref.Z) > 0
+                            st.crossed = dir * (pos.Z - ref.Z) > 0 and xOk(pos)
                         end
                         enemyState[m] = st
                     else
-                        local nearNow = math.abs(pos.X - ref.X) <= maxDX and math.abs(pos.Z - ref.Z) <= band
+                        local nearNow = math.abs(pos.X - ref.X) <= maxDX and math.abs(pos.Z - ref.Z) <= band and xOk(pos)
                         if nearNow and not st.near then
                             st.near = true
                             event = true
@@ -4204,7 +4286,7 @@ local function runFarmProfile(profile)
                             else
                                 passed = (st.firstZ - ref.Z) * (pos.Z - ref.Z) < 0
                             end
-                            if passed then
+                            if passed and xOk(pos) then
                                 st.crossed = true
                                 event = true
                             end
@@ -4232,12 +4314,58 @@ local function runFarmProfile(profile)
                         local interval = tonumber(ab.Interval or ab.interval) or 2
                         local now = clockNow()
                         local trig = true
-                        if type(ab.Trigger) == "table" and #ids > 0 then
+                        local jk = type(ab.Jockey) == "table" and ab.Jockey or nil
+                        if jk and #ids > 0 then
+                            local alive = 0
+                            for m in pairs(spawnTrack.pending) do
+                                if m.Parent then
+                                    alive = alive + 1
+                                else
+                                    spawnTrack.pending[m] = nil
+                                end
+                            end
+                            if alive > 0 then
+                                trig = false
+                                if now - spawnTrack.lastJockeyAdd >= (tonumber(jk.Settle) or 1.5) then
+                                    table.sort(ids, function(a, b)
+                                        return (spawnTrack.used[a] or -1e9) < (spawnTrack.used[b] or -1e9)
+                                    end)
+                                    for i = 1, math.min(#ids, tonumber(jk.Use) or 2) do
+                                        local id = ids[i]
+                                        spawnTrack.used[id] = now
+                                        pcall(function()
+                                            activateUnitAbility:InvokeServer(id)
+                                        end)
+                                    end
+                                    spawnTrack.fired = spawnTrack.fired + 1
+                                    for m in pairs(spawnTrack.pending) do
+                                        spawnTrack.pending[m] = nil
+                                    end
+                                    lastFire[unitName] = now
+                                end
+                            else
+                                for m in pairs(spawnTrack.alive) do
+                                    if m.Parent then
+                                        trig = false
+                                    else
+                                        spawnTrack.alive[m] = nil
+                                    end
+                                end
+                                if spawnTrack.jockeyWave then
+                                    trig = false
+                                end
+                            end
+                        end
+                        if trig and type(ab.Trigger) == "table" and tonumber(ab.Trigger.UntilWave) and getWaveNumber() > tonumber(ab.Trigger.UntilWave) then
+                            trig = false
+                        end
+                        if trig and type(ab.Trigger) == "table" and #ids > 0 then
                             trig = abilityTriggerMet(ab.Trigger)
                         end
                         if trig and #ids > 0 and (not lastFire[unitName] or now - lastFire[unitName] >= interval) then
                             lastFire[unitName] = now
                             for _, id in ipairs(ids) do
+                                spawnTrack.used[id] = now
                                 pcall(function()
                                     activateUnitAbility:InvokeServer(id)
                                 end)
