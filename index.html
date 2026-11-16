@@ -1043,10 +1043,14 @@
       })().finally(()=>{if(track._decodeJob===job)track._decodeJob=null;});
       track._decodeJob=job;return job.promise;
     }
+    const MAX_IMPORT_BYTES=100*1024*1024; // 100 MiB; reject before adding to the library.
     let progressHideTimer=null;
     async function importFiles(files, addToPlaylist = false) {
       if(!files.length) return;
       if(!ready || busy){notify('Vui lòng chờ nhập file hoàn tất.');return;}
+      const tooLarge=files.filter(file=>file.size>MAX_IMPORT_BYTES);
+      if(tooLarge.length)notify((tooLarge.length===1?'File '+tooLarge[0].name:'Có '+tooLarge.length+' file')+' vượt quá 100 MB. Web sẽ không lưu các file này.');
+      files=files.filter(file=>file.size<=MAX_IMPORT_BYTES);if(!files.length)return;
       busy=true;clearTimeout(progressHideTimer);
       const target=collections.find(p=>p.id===activeCollection),panel=$('uploadSummary');
       panel.classList.remove('failed');panel.hidden=false;
@@ -1868,6 +1872,7 @@
       const track=playlist[i];if(!track)return;
       replaceFileInput.onchange=async e=>{
         const f=e.target.files[0];e.target.value='';if(!f)return;
+        if(f.size>MAX_IMPORT_BYTES){notify('File '+f.name+' vượt quá 100 MB. Web sẽ không lưu file này.');return;}
         const wasCurrent=playlist[currentTrackIndex]===track, wasPlaying=isPlaying;
         collections.forEach(p=>{if(p.cues)delete p.cues[track.id];if(p.skips)delete p.skips[track.id];});persistMeta();cueEditing=null;pendingCue=null;
         Object.assign(track,{file:f,buffer:null,duration:0,waveData:null,cloudKey:null,syncFileKey:null,syncWaveKey:null,_cloudSynced:false,_waveJob:null,_wavePipeline:null,_decodeJob:null});markCloudDirty();
