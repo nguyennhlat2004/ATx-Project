@@ -28,4 +28,4 @@ Mỗi mục thùng rác có ngày giờ xóa; sau 30 ngày, lần dọn thành c
 
 ## Chuyển thư viện đang ở R2
 
-Giữ R2 hoạt động và kết nối R2 trên trang trước, rồi kết nối GitHub. App sẽ tải file chưa có trên máy từ R2 và đưa lên repo. Đợi GitHub báo đồng bộ xong, thử mở trên thiết bị khác và phát một số bài trước khi ngắt hoặc xóa dữ liệu R2. Nếu không còn R2 hoặc bản local của một bài, app không thể tự tạo lại file đó. Các bản sao lưu thủ công R2 cũ không tự chuyển; khôi phục chúng vào playlist trước khi đồng bộ GitHub.
+Giao diện và đồng bộ ghi lên R2 đã được gỡ. Để bảo vệ thư viện cũ, app vẫn có đường **chỉ đọc** file R2 khi bài chưa có bản trên máy hoặc GitHub và phiên trình duyệt còn lưu URL/token R2 cũ. Kết nối GitHub, đợi đồng bộ xong, rồi thử mở và phát trên thiết bị khác trước khi xóa dữ liệu R2. Nếu phiên cũ không còn token, cần mở lại phiên/bản web cũ để chuyển các bài đó trước; đừng xóa bucket. Nếu không còn R2 hoặc bản local của một bài, app không thể tự tạo lại file đó. Các bản sao lưu thủ công R2 cũ không tự chuyển; cần khôi phục chúng bằng bản web cũ trước khi đồng bộ GitHub.

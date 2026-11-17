@@ -309,7 +309,6 @@
     .app-dialog-actions button:focus-visible,.app-dialog input:focus-visible {outline:2px solid #93c5fd;outline-offset:2px;}
     .r2-input {width:100%;min-width:0;min-height:42px;padding:0 11px;border:1px solid #424754;border-radius:10px;background:#24262e;color:#f4f4f6;font:inherit;font-size:12px;}
     .r2-buttons {display:flex;gap:8px;}.r2-buttons .ui-select {flex:1;}.r2-buttons .ui-action {min-width:0;}
-    #r2Status {font-size:11px;line-height:1.4;color:#aeb5c2;overflow-wrap:anywhere;}#r2Status:empty {display:none;}
     .reload-mini {display:grid;gap:5px;}
     .reload-mini[hidden] {display:none;}
     .playlist-edit {display:flex;align-items:center;gap:8px;justify-content:flex-end;}
@@ -524,17 +523,6 @@
       <button type="button" class="ui-action" id="githubInstallCleanup">Bật dọn rác tự động</button>
       <div id="githubStatus" role="status" aria-live="polite" style="font-size:11px;color:var(--text2)"></div>
     </div>
-    <div class="settings-card" id="r2Card">
-      <div class="section-label">Cloudflare R2</div>
-      <input class="r2-input" id="r2Url" type="url" placeholder="https://ten-worker.workers.dev" aria-label="URL Cloudflare Worker" autocomplete="off">
-      <input class="r2-input" id="r2Token" type="password" placeholder="MUSIC_TOKEN" aria-label="MUSIC_TOKEN" autocomplete="off">
-      <div class="r2-buttons"><button type="button" class="ui-action" id="r2Connect">Kết nối</button><button type="button" class="ui-action" id="r2Disconnect">Ngắt</button></div>
-      <div class="r2-buttons"><button type="button" class="ui-action" id="r2PullSync">Dùng bản R2</button><button type="button" class="ui-action" id="r2PushSync">Dùng bản máy</button></div>
-      <button type="button" class="ui-action" id="r2Backup">Sao lưu playlist đang chọn</button>
-      <div class="r2-buttons"><select id="r2Playlist" aria-label="Bản sao lưu trên R2"><option value="" selected disabled>Chọn bản sao lưu</option></select><button type="button" class="ui-action" id="r2List">Tải danh sách</button></div>
-      <button type="button" class="ui-action" id="r2Restore">Khôi phục thành playlist mới</button>
-      <div id="r2Status" role="status" aria-live="polite"></div>
-    </div>
     <div class="settings-card">
       <div class="section-label">Xuất file âm thanh</div>
       <div class="export-controls">
@@ -736,7 +724,7 @@
         tx.oncomplete = () => resolve(req?.result); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error('Giao dịch bị hủy'));
       });
     }
-    function putTrack(t) { if(deletingIds.has(t.id)) return Promise.resolve(); const current=library.find(x=>x.id===t.id),remote=!!(t._cloudSynced && t.syncFileKey && t.syncWaveKey);return transaction('tracks','readwrite',store => store.put({id:t.id,name:current?.name||t.name,file:remote?null:t.file,duration:t.duration,waveData:t.waveData || null,cloudKey:t.cloudKey || null,syncFileKey:t.syncFileKey||null,syncWaveKey:t.syncWaveKey||null,cloudFileName:t.cloudFileName||t.file?.name||null,cloudType:t.cloudType||t.file?.type||'',ghFileSha:t.ghFileSha||null,ghFileParts:t.ghFileParts||null,ghWaveSha:t.ghWaveSha||null,_cloudSynced:remote})); }
+    function putTrack(t) { if(deletingIds.has(t.id)) return Promise.resolve(); const current=library.find(x=>x.id===t.id),remote=!!(t._cloudSynced && t.syncFileKey && t.syncWaveKey);return transaction('tracks','readwrite',store => store.put({id:t.id,name:current?.name||t.name,file:remote&&!t.ghFileSha?null:t.file,duration:t.duration,waveData:t.waveData || null,cloudKey:t.cloudKey || null,syncFileKey:t.syncFileKey||null,syncWaveKey:t.syncWaveKey||null,cloudFileName:t.cloudFileName||t.file?.name||null,cloudType:t.cloudType||t.file?.type||'',ghFileSha:t.ghFileSha||null,ghFileParts:t.ghFileParts||null,ghWaveSha:t.ghWaveSha||null,_cloudSynced:remote})); }
     function persistMeta() {
       if(!ready || !db) return;
       const active = collections.find(p => p.id === activeCollection);
@@ -790,7 +778,7 @@
       selected?.focus({preventScroll:true});selected?.scrollIntoView({block:'nearest'});
     }
     function setupCustomSelects() {
-      ['playlistSelect','historyPlaylistSelect','cueDeletePlaylist','cueDeleteTrack','soundSettingsPlaylist','exportScope','exportFormat','skipDeletePlaylist','skipDeleteTrack','r2Playlist','trashSelect'].forEach(id=>{
+      ['playlistSelect','historyPlaylistSelect','cueDeletePlaylist','cueDeleteTrack','soundSettingsPlaylist','exportScope','exportFormat','skipDeletePlaylist','skipDeleteTrack','trashSelect'].forEach(id=>{
         const select=$(id),wrapper=document.createElement('div'),button=document.createElement('button'),value=document.createElement('span'),chevron=document.createElement('span'),menu=document.createElement('div');
         wrapper.className='ui-select';button.type='button';button.className='ui-select-button';
         button.setAttribute('aria-haspopup','listbox');button.setAttribute('aria-expanded','false');button.setAttribute('aria-controls',id+'-options');
@@ -927,14 +915,13 @@
       const job=(async()=>{let record=await transaction('tracks','readonly',store=>store.get(track.id));
         const syncFileKey=record?.syncFileKey||track.syncFileKey,syncWaveKey=record?.syncWaveKey||track.syncWaveKey;
         let fetchedWave=false,fetchedGh=false;
-        if(!record?.file && syncFileKey && syncWaveKey && r2Url && r2Token){
+        if(!record?.file && record?.ghFileSha && ghToken){const [file,wave]=await Promise.all([ghDownloadFile(record.ghFileParts||[record.ghFileSha],record.cloudFileName||record.name,record.cloudType||''),record.waveData?.rms?.length?Promise.resolve(record.waveData):ghDownloadWave(record.ghWaveSha)]);if(track.file)return track;record={...record,file,waveData:wave};fetchedGh=true;}
+        if(!record?.file && !record?.ghFileSha && syncFileKey && syncWaveKey && r2Url && r2Token){
           const waveValid=record?.syncFileKey===syncFileKey&&record?.syncWaveKey===syncWaveKey&&record?.waveData?.version===2&&record.waveData.rms?.length;
-          try{const [file,wave]=await Promise.all([cloudDownloadFile(syncFileKey,record?.cloudFileName||track.name,record?.cloudType||''),waveValid?Promise.resolve(record.waveData):cloudDownloadWave(syncWaveKey)]);
-          fetchedWave=!waveValid;record={...record,id:track.id,name:record?.name||track.name,file,waveData:wave,syncFileKey,syncWaveKey,_cloudSynced:true};}
-          catch(e){if(!record?.ghFileSha||!ghToken)throw e;}
+          const [file,wave]=await Promise.all([cloudDownloadFile(syncFileKey,record?.cloudFileName||track.name,record?.cloudType||''),waveValid?Promise.resolve(record.waveData):cloudDownloadWave(syncWaveKey)]);
+          fetchedWave=!waveValid;record={...record,id:track.id,name:record?.name||track.name,file,waveData:wave,syncFileKey,syncWaveKey,_cloudSynced:true};
         }
         if(track.file)return track; // Không ghi đè file mới được thay trong khi đang tải.
-        if(!record?.file && record?.ghFileSha && ghToken){const [file,wave]=await Promise.all([ghDownloadFile(record.ghFileParts||[record.ghFileSha],record.cloudFileName||record.name,record.cloudType||''),record.waveData?.rms?.length?Promise.resolve(record.waveData):ghDownloadWave(record.ghWaveSha)]);if(track.file)return track;record={...record,file,waveData:wave};fetchedGh=true;}
         if(!record?.file && track.cloudKey && r2Url && r2Token){const file=await r2DownloadTrack(track.cloudKey,track.name,'');if(track.file)return track;record={id:track.id,name:track.name,file,duration:track.duration||0,waveData:null,cloudKey:track.cloudKey};await transaction('tracks','readwrite',store=>store.put(record));}if(!record?.file)throw new Error('Không tìm thấy file đã lưu');
         const knownName=track._unknown?null:track.name;Object.assign(track,record,{name:knownName||record.name||'Bài hát',buffer:null,_unknown:false});
         if(fetchedWave||fetchedGh)try{await putTrack(track);}catch(e){notify('Không lưu được waveform để reload nhanh: '+e.message);}return track;
@@ -1162,7 +1149,7 @@
         const names=state?.trackNames&&typeof state.trackNames==='object'?state.trackNames:{};
         const cloudKeys=state?.trackCloudKeys&&typeof state.trackCloudKeys==='object'?state.trackCloudKeys:{};library=ids.map(id=>({id,name:names[id]||'Đang tải…',file:null,buffer:null,duration:0,waveData:null,cloudKey:cloudKeys[id]||null,_unknown:!names[id]}));
         collections.forEach(p=>{if(!p.skips||typeof p.skips!=='object')p.skips={};});
-        ready=true;cloudFingerprintBaseline();openCollection(activeCollection,true);if(r2Url&&r2Token)cloudCheck();if(ghToken)ghSchedule(1200);
+        ready=true;cloudFingerprintBaseline();openCollection(activeCollection,true);if(ghToken)ghSchedule(1200);
       }catch(e){notify('Không truy cập được bộ nhớ trình duyệt: '+e.message+'. Hãy mở file bằng trình duyệt hoặc máy chủ web, không dùng khung xem trước hạn chế.');}
     }
     $('playlistSelect').onchange=e=>{if(busy){e.target.value=activeCollection;notify('Vui lòng chờ nhập file hoàn tất.');return;}openCollection(e.target.value);};
@@ -1791,8 +1778,7 @@
         deleteSoundSettings:['trash','Xóa cài đặt playlist đã chọn'],deleteAllSoundSettings:['trashAll','Xóa cài đặt của tất cả playlist'],
         deleteUploads:['trashAll','Xóa Upload'],restoreTrash:['restore','Khôi phục bài đã xóa'],
         githubInstallCleanup:['reset','Bật dọn rác tự động'],githubConnect:['connect','Kết nối GitHub Storage'],githubDisconnect:['disconnect','Ngắt GitHub Storage'],githubPull:['download','Dùng bản repo'],githubPush:['upload','Dùng bản máy'],
-        r2Connect:['connect','Kết nối R2'],r2Disconnect:['disconnect','Ngắt R2'],r2PullSync:['download','Dùng bản R2'],r2PushSync:['upload','Dùng bản máy'],
-        r2Backup:['upload','Sao lưu playlist đang chọn'],r2List:['list','Tải danh sách bản sao lưu'],r2Restore:['restore','Khôi phục thành playlist mới'],exportBtn:['download','Xuất file âm thanh']};
+        exportBtn:['download','Xuất file âm thanh']};
       for(const [id,[kind,label]] of Object.entries(actions))setActionIcon($(id),kind,label);
     }
     let playlistEdit=false;
@@ -2211,99 +2197,33 @@
 
     window.addEventListener('resize', ()=>{drawEQBars();drawWaveform();});
     progressContainer.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekRelative(e.key==='ArrowRight'?5:-5);}});
-    // R2 là sao lưu tùy chọn; không upload hoặc thay dữ liệu cục bộ nếu chưa được yêu cầu.
-    const r2UrlKey='localPlayer.r2Url',r2TokenKey='localPlayer.r2Token';let r2Url='',r2Token='',r2Busy=false;
-    try{r2Url=localStorage.getItem(r2UrlKey)||'';r2Token=sessionStorage.getItem(r2TokenKey)||'';$('r2Url').value=r2Url;$('r2Token').value=r2Token;}catch(e){}
-    function r2SetStatus(s){$('r2Status').textContent=s;}
-    function r2ValidateUrl(value){const url=new URL(value.trim());if((url.protocol!=='https:' && !(url.protocol==='http:'&&['localhost','127.0.0.1'].includes(url.hostname)))||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new Error('Nhập URL HTTPS của Worker, không kèm đường dẫn.');return url.origin;}
+    // Chỉ đọc dữ liệu lưu từ phiên cũ khi cần chuyển sang GitHub;
+    // không còn màn hình R2 hoặc đồng bộ/ghi mới lên R2.
+    const r2UrlKey='localPlayer.r2Url',r2TokenKey='localPlayer.r2Token';let r2Url='',r2Token='';
+    try{r2Url=localStorage.getItem(r2UrlKey)||'';r2Token=sessionStorage.getItem(r2TokenKey)||'';}catch(e){}
     async function r2Request(path,options={}){
-      if(!r2Url||!r2Token)throw new Error('Chưa kết nối R2.');
+      if(!r2Url||!r2Token)throw new Error('Chưa có thông tin truy cập dữ liệu cũ.');
+      if(options.method && options.method!=='GET')throw new Error('Chỉ đọc dữ liệu cũ để chuyển sang GitHub.');
       const controller=options.signal?null:new AbortController(),timer=controller?setTimeout(()=>controller.abort(),options.method==='PUT'?180000:30000):null;
       try{const response=await fetch(r2Url+path,{...options,signal:options.signal||controller.signal,headers:{...(options.headers||{}),Authorization:'Bearer '+r2Token},credentials:'omit'});
         if(!response.ok){let msg=await response.text().catch(()=>'');if(r2Token)msg=msg.split(r2Token).join('[đã ẩn]');throw new Error('R2 lỗi '+response.status+(msg?' · '+msg.slice(0,120):''));}return response;
       }catch(e){if(e.name==='AbortError')throw new Error('R2 phản hồi quá lâu.');throw e;}finally{if(timer)clearTimeout(timer);}
     }
-    $('r2Connect').onclick=async()=>{
-      if(r2Busy){r2SetStatus('Đang xử lý R2, hãy thử lại sau.');return;}r2Busy=true;
-      try{const url=r2ValidateUrl($('r2Url').value),token=$('r2Token').value.trim();if(token.length<32)throw new Error('MUSIC_TOKEN cần ít nhất 32 ký tự.');
-        r2Url=url;r2Token=token;const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);try{await r2Request('/health',{signal:controller.signal});}finally{clearTimeout(timer);}
-        const list=$('r2Playlist');list.replaceChildren(new Option('Chọn bản sao lưu','',true,true));list.options[0].disabled=true;syncSelect(list);
-        try{localStorage.setItem(r2UrlKey,url);sessionStorage.setItem(r2TokenKey,token);}catch(e){}r2SetStatus('Đã kết nối R2.');
-      }catch(e){r2Url='';r2Token='';try{localStorage.removeItem(r2UrlKey);sessionStorage.removeItem(r2TokenKey);}catch(_){}r2SetStatus((e.message||'Không thể kết nối R2.')+' Nhạc trên máy vẫn dùng được.');}
-      finally{r2Busy=false;if(r2Url&&r2Token){cloudPaused=false;cloudSchedule(300);}}
-    };
-    $('r2Disconnect').onclick=()=>{if(r2Busy){r2SetStatus('Đang xử lý R2, hãy thử lại sau.');return;}r2Url='';r2Token='';$('r2Url').value='';$('r2Token').value='';try{localStorage.removeItem(r2UrlKey);sessionStorage.removeItem(r2TokenKey);}catch(e){}$('r2Playlist').replaceChildren(new Option('Chọn bản sao lưu','',true,true));$('r2Playlist').options[0].disabled=true;syncSelect($('r2Playlist'));r2SetStatus('Đã ngắt kết nối.');};
     async function r2DownloadTrack(id,name,type){
       if(!/^[A-Za-z0-9_-]{1,128}$/.test(id||''))throw new Error('Mã file R2 không hợp lệ.');
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),180000);
       try{const response=await r2Request('/tracks/'+id,{signal:controller.signal});const blob=await response.blob();if(!blob.size)throw new Error('File R2 rỗng.');return new File([blob],String(name||'audio').slice(0,200),{type:String(type||'').slice(0,100)});}
       catch(e){if(e.name==='AbortError')throw new Error('Tải file từ R2 quá lâu.');throw e;}finally{clearTimeout(timer);}
     }
-    $('r2Backup').onclick=async()=>{
-      if(!ready||busy||r2Busy)return;const p=activePlaylist(),tracks=[...playlist];if(!p||!tracks.length){r2SetStatus('Playlist đang chọn không có bài.');return;}
-      if(!r2Url||!r2Token){r2SetStatus('Hãy kết nối R2 trước. Nhạc trên máy vẫn dùng được.');return;}
-      if(!await confirmAction('Tải '+tracks.length+' file của playlist "'+p.name+'" lên R2? Thao tác dùng mạng và dung lượng R2.'))return;
-      if(r2Busy)return;r2Busy=true;
-      // Chụp cấu hình và tên tại lúc bắt đầu; sao lưu không chiếm khóa nhập file cục bộ.
-      const snapshot={id:p.id,name:p.name,settings:JSON.parse(JSON.stringify(p.settings||defaultSettings())),cues:JSON.parse(JSON.stringify(p.cues||{})),skips:JSON.parse(JSON.stringify(p.skips||{})),mutedIds:[...(p.mutedIds||[])]};
-      const jobs=tracks.map(t=>({track:t,id:t.id,name:t.name})),uploaded=[];
-      try{
-        for(let i=0;i<jobs.length;i++){
-          r2SetStatus('Đang sao lưu '+(i+1)+'/'+jobs.length+'…');const job=jobs[i],t=await ensureTrackLoaded(job.track),file=t.file;
-          if(file.size>90*1024*1024)throw new Error('File '+job.name+' lớn hơn 90 MB.');
-          const cloudKey=newId();await r2Request('/tracks/'+cloudKey,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:file});
-          uploaded.push({id:job.id,name:job.name,fileName:file.name||job.name,type:file.type||'',duration:t.duration||0,cloudKey,file});
-        }
-        const manifest={version:1,name:snapshot.name,savedAt:new Date().toISOString(),settings:snapshot.settings,cues:snapshot.cues,skips:snapshot.skips,mutedIds:snapshot.mutedIds,tracks:uploaded.map(({file,...item})=>item)};
-        await r2Request('/playlists/'+snapshot.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(manifest)});
-        // Không ghi đè bài đã bị thay/xóa trong lúc sao lưu chạy nền.
-        for(const item of uploaded){const t=jobs.find(x=>x.id===item.id)?.track;if(t && library.includes(t) && !deletingIds.has(t.id) && t.file===item.file){t.cloudKey=item.cloudKey;await putTrack(t);}}
-        persistMeta();r2SetStatus('Đã sao lưu '+uploaded.length+' bài.');
-      }catch(e){r2SetStatus('Không sao lưu được lên R2: '+(e.message||e)+'. File trên máy vẫn giữ nguyên và có thể dùng bình thường.');}
-      finally{r2Busy=false;}
-    };
-    $('r2List').onclick=async()=>{
-      if(r2Busy)return;r2Busy=true;r2SetStatus('Đang tải danh sách…');try{
-        const result=await (await r2Request('/playlists')).json(),ids=Array.isArray(result.ids)?result.ids.slice(0,100):[];
-        const manifests=await Promise.all(ids.map(async id=>{try{return {id,data:await (await r2Request('/playlists/'+encodeURIComponent(id))).json()};}catch(e){return null;}}));
-        const sel=$('r2Playlist');sel.replaceChildren(new Option('Chọn bản sao lưu','',true,true));sel.options[0].disabled=true;
-        manifests.filter(x=>x&&x.data?.version===1).forEach(x=>sel.add(new Option(String(x.data.name||'Playlist')+' · '+(x.data.tracks?.length||0)+' bài',x.id)));syncSelect(sel);r2SetStatus(sel.options.length>1?'Đã tải danh sách.':'Chưa có bản sao lưu.');
-      }catch(e){r2SetStatus('Không tải được danh sách: '+(e.message||e));}finally{r2Busy=false;}
-    };
-    $('r2Restore').onclick=async()=>{
-      const cloudId=$('r2Playlist').value;if(!cloudId||r2Busy||busy)return;if(!await confirmAction('Tải bản sao lưu từ R2 và tạo playlist mới?'))return;
-      if(r2Busy)return;r2Busy=true;const added=[],written=[],generation=libraryGeneration;let localLock=false,committed=false;
-      try{
-        const manifest=await (await r2Request('/playlists/'+encodeURIComponent(cloudId))).json();if(manifest?.version!==1||!Array.isArray(manifest.tracks)||manifest.tracks.length>1000)throw new Error('Bản sao lưu không hợp lệ.');
-        const map=new Map();for(let i=0;i<manifest.tracks.length;i++){
-          const item=manifest.tracks[i];r2SetStatus('Đang khôi phục '+(i+1)+'/'+manifest.tracks.length+'…');
-          if(!item||!item.id||!item.cloudKey||map.has(item.id))throw new Error('Thông tin bài không hợp lệ.');const file=await r2DownloadTrack(item.cloudKey,item.fileName,item.type),id=newId();
-          const t={id,name:String(item.name||file.name).slice(0,200),file,buffer:null,duration:Number.isFinite(item.duration)?item.duration:0,waveData:null,cloudKey:item.cloudKey};added.push(t);map.set(item.id,id);
-        }
-        // Chỉ khóa thao tác cục bộ trong lúc lưu các file đã tải xong.
-        if(generation!==libraryGeneration)throw new Error('Dữ liệu cục bộ đã được xóa trong lúc tải. Hãy khôi phục lại nếu muốn.');
-        if(busy)throw new Error('Đang xử lý file cục bộ. Hãy thử khôi phục lại sau khi hoàn tất.');
-        busy=true;localLock=true;
-        const remap=obj=>Object.fromEntries(Object.entries(obj&&typeof obj==='object'?obj:{}).filter(([id])=>map.has(id)).map(([id,v])=>[map.get(id),v]));
-        const p={id:newId(),name:String(manifest.name||'Playlist R2').slice(0,100)+' (R2)',ids:added.map(t=>t.id),settings:manifest.settings||defaultSettings(),cues:remap(manifest.cues),skips:remap(manifest.skips),mutedIds:(Array.isArray(manifest.mutedIds)?manifest.mutedIds:[]).filter(id=>map.has(id)).map(id=>map.get(id))};
-        for(const t of added){await putTrack(t);written.push(t);}
-        library.push(...added);collections.push(p);committed=true;openCollection(p.id);r2SetStatus('Đã khôi phục '+added.length+' bài thành playlist mới.');
-      }catch(e){if(!committed)for(const t of written)try{await transaction('tracks','readwrite',s=>s.delete(t.id));}catch(_){}r2SetStatus('Khôi phục chưa hoàn tất: '+(e.message||e)+'. Dữ liệu đang có trên máy không bị xóa.');}
-      finally{if(localLock)busy=false;r2Busy=false;}
-    };
-
     // Đồng bộ toàn bộ thư viện: lưu cục bộ khi mất mạng, CAS tránh ghi đè thiết bị khác.
-    const cloudEtagKey='localPlayer.sync.etag',cloudDirtyKey='localPlayer.sync.dirty',cloudOwnerKey='localPlayer.sync.owner';
-    let cloudEtag=null,cloudDirty=false,cloudOwner='',cloudVersion=0,cloudFingerprint=null,cloudSuspend=false,cloudPaused=false,cloudTimer=null;
-    try{cloudEtag=localStorage.getItem(cloudEtagKey)||null;cloudDirty=localStorage.getItem(cloudDirtyKey)==='1';cloudOwner=localStorage.getItem(cloudOwnerKey)||'';}catch(e){}
+    let cloudFingerprint=null,cloudSuspend=false;
     function cloudFingerprintValue(){
       const ids=new Set([...collections.flatMap(p=>p.ids||[]),...trash.map(x=>x.trackId)]);
       return JSON.stringify({collections,activeCollection,trash,names:library.filter(t=>ids.has(t.id)&&!t._unknown).map(t=>[t.id,t.name]),autoUpload});
     }
     function cloudFingerprintBaseline(){cloudFingerprint=cloudFingerprintValue();}
     function cloudFingerprintChanged(){if(cloudSuspend)return;const next=cloudFingerprintValue();if(cloudFingerprint===null){cloudFingerprint=next;return;}if(next!==cloudFingerprint){cloudFingerprint=next;markCloudDirty();}}
-    function markCloudDirty(){if(cloudSuspend)return;cloudDirty=true;cloudVersion++;try{localStorage.setItem(cloudDirtyKey,'1');}catch(e){}cloudSchedule();ghMarkDirty();}
-    function cloudSchedule(delay=1500){clearTimeout(cloudTimer);if(!ready||!r2Url||!r2Token||cloudPaused)return;cloudTimer=setTimeout(()=>cloudCheck(),delay);}
+    function markCloudDirty(){if(!cloudSuspend)ghMarkDirty();}
     function refreshTrashSelect(){
       const select=$('trashSelect');if(!select)return;const previous=select.value,now=Date.now();const items=trash.filter(t=>Number.isFinite(t.deletedAt)&&t.deletedAt+30*86400000>now);
       select.replaceChildren(new Option(items.length?'Chọn bài đã xóa':'Chưa có bài đã xóa','',true,true));select.options[0].disabled=true;
@@ -2328,81 +2248,7 @@
     };
     async function cloudDownloadFile(key,name,type){const res=await r2Request('/sync-files/'+encodeURIComponent(key));const blob=await res.blob();if(!blob.size)throw new Error('File trên R2 rỗng');return new File([blob],name||'audio',{type:type||''});}
     async function cloudDownloadWave(key){const res=await r2Request('/sync-waves/'+encodeURIComponent(key));const data=await res.json();if(data?.version!==2||!Array.isArray(data.peaks)||!Array.isArray(data.rms)||!data.peaks.length||data.peaks.length>20000||data.peaks.length!==data.rms.length||!Number.isFinite(data.maxRms))throw new Error('Waveform trên R2 không hợp lệ');return {version:2,peaks:Float32Array.from(data.peaks),rms:Float32Array.from(data.rms),maxRms:data.maxRms};}
-    async function cloudReadState(){
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
-      try{const res=await fetch(r2Url+'/sync-state',{headers:{Authorization:'Bearer '+r2Token},credentials:'omit',signal:controller.signal});
-      if(res.status===404)return null;if(!res.ok)throw new Error('Không đọc được thư viện R2 ('+res.status+').');
-      const data=await res.json(),etag=res.headers.get('ETag');if(!etag||data?.version!==2||!Array.isArray(data.collections)||!Array.isArray(data.tracks)||!Array.isArray(data.trash))throw new Error('Trạng thái R2 không hợp lệ.');return {data,etag};
-      }catch(e){if(e.name==='AbortError')throw new Error('R2 phản hồi quá lâu.');throw e;}finally{clearTimeout(timer);}
-    }
-    function cloudRemember(etag,dirty){cloudEtag=etag;cloudDirty=dirty;try{if(etag)localStorage.setItem(cloudEtagKey,etag);else localStorage.removeItem(cloudEtagKey);localStorage.setItem(cloudDirtyKey,dirty?'1':'0');localStorage.setItem(cloudOwnerKey,r2Url);cloudOwner=r2Url;}catch(e){}}
-    async function cloudApply(remote){
-      if(busy)throw new Error('Đang xử lý dữ liệu trên máy, hãy thử lại sau.');
-      const data=remote.data;if(!data.collections.length)throw new Error('Thư viện R2 không có playlist.');
-      const ids=new Set();for(const t of data.tracks){if(!t||!/^[A-Za-z0-9_-]{1,128}$/.test(t.id)||!/^[A-Za-z0-9_-]{1,128}$/.test(t.fileKey)||!/^[A-Za-z0-9_-]{1,128}$/.test(t.waveKey)||ids.has(t.id))throw new Error('Danh sách bài R2 không hợp lệ.');ids.add(t.id);}
-      for(const p of data.collections)if(!p||!Array.isArray(p.ids)||p.ids.some(id=>!ids.has(id)))throw new Error('Playlist R2 thiếu file.');
-      if(data.trash.some(t=>!ids.has(t.trackId)))throw new Error('Thùng rác R2 thiếu file.');
-      const nextCollections=data.collections,nextTrash=data.trash,nextActive=nextCollections.some(p=>p.id===data.activeCollection)?data.activeCollection:nextCollections[0].id;
-      const records=data.tracks.map(t=>({id:t.id,name:String(t.name||'Bài hát').slice(0,200),file:null,duration:Number(t.duration)||0,waveData:null,syncFileKey:t.fileKey,syncWaveKey:t.waveKey,cloudFileName:String(t.fileName||'audio').slice(0,200),cloudType:String(t.type||'').slice(0,100),_cloudSynced:true}));
-      const state={id:'state',collections:nextCollections,activeCollection:nextActive,trash:nextTrash,trackNames:Object.fromEntries(records.map(t=>[t.id,t.name])),trackCloudKeys:{}};
-      busy=true;document.querySelector('.player-card').inert=true;cloudSuspend=true;++reloadToken;reloadInProgress=false;clearTimeout(reloadHideTimer);try{
-        await new Promise((resolve,reject)=>{const tx=db.transaction(['tracks','meta'],'readwrite');const store=tx.objectStore('tracks');
-          records.forEach(t=>{const get=store.get(t.id);get.onsuccess=()=>{const prev=get.result;if(prev?.syncFileKey===t.syncFileKey&&prev?.syncWaveKey===t.syncWaveKey){if(prev.waveData?.version===2)t.waveData=prev.waveData;t.ghFileSha=prev.ghFileSha||null;t.ghFileParts=prev.ghFileParts||null;t.ghWaveSha=prev.ghWaveSha||null;}store.put(t);};});
-          store.clear();tx.objectStore('meta').put(state);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('Không lưu được thư viện'));});
-        clearPlayer();library=records.map(t=>({...t,buffer:null}));collections=nextCollections;trash=nextTrash;activeCollection=nextActive;
-        if(typeof data.autoUpload==='boolean'){autoUpload=data.autoUpload;try{localStorage.setItem(autoUploadKey,String(autoUpload));}catch(e){}updateAutoUploadToggle();}
-        cloudRemember(remote.etag,false);cloudPaused=false;cloudFingerprintBaseline();openCollection(activeCollection,true);r2SetStatus('Đã tải thư viện từ R2.');
-      }finally{cloudSuspend=false;cloudFingerprintBaseline();busy=false;document.querySelector('.player-card').inert=false;}
-    }
-    async function cloudPush(verifyExisting=false){
-      const version=cloudVersion,ids=new Set([...collections.flatMap(p=>p.ids||[]),...trash.map(t=>t.trackId)]),jobs=[];
-      for(const id of ids){const t=library.find(x=>x.id===id);if(!t)throw new Error('Thiếu dữ liệu một bài trên máy.');
-        // Không tải lại âm thanh của những playlist khác nếu bản đó đã đồng bộ.
-        if(!t.file && (!t.syncFileKey || !t.syncWaveKey)){const stored=await transaction('tracks','readonly',store=>store.get(id));
-          if(stored?._cloudSynced && stored.syncFileKey && stored.syncWaveKey){Object.assign(t,{syncFileKey:stored.syncFileKey,syncWaveKey:stored.syncWaveKey,cloudFileName:stored.cloudFileName,cloudType:stored.cloudType,duration:stored.duration||0,_cloudSynced:true});if(t._unknown){t.name=stored.name||t.name;t._unknown=false;}}
-        }
-        if(t._cloudSynced && t.syncFileKey && t.syncWaveKey){if(verifyExisting){await r2Request('/sync-files/'+encodeURIComponent(t.syncFileKey),{method:'HEAD'});await r2Request('/sync-waves/'+encodeURIComponent(t.syncWaveKey),{method:'HEAD'});}jobs.push({t,already:true,id:t.id,name:t.name,duration:t.duration||0,fileName:t.cloudFileName||t.name,type:t.cloudType||'',fileKey:t.syncFileKey,waveKey:t.syncWaveKey});continue;}
-        await ensureTrackLoaded(t);if(!t.waveData?.rms?.length)await ensureTrackWaveform(t);const file=t.file,wave=t.waveData;
-        if(!file||!wave?.rms?.length||!wave?.peaks?.length)throw new Error('Không đủ file và waveform cho '+t.name+'.');
-        if(file.size>90*1024*1024)throw new Error('File '+t.name+' lớn hơn 90 MB; vẫn giữ trên máy.');
-        let fileKey=t.syncFileKey,waveKey=t.syncWaveKey;
-        if(!fileKey){fileKey=newId();await r2Request('/sync-files/'+fileKey,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:file});}
-        if(!waveKey){waveKey=newId();const data={version:2,peaks:Array.from(wave.peaks),rms:Array.from(wave.rms),maxRms:wave.maxRms};await r2Request('/sync-waves/'+waveKey,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});}
-        if(t.file!==file||t.waveData!==wave)throw new Error('Bài đã thay đổi khi đồng bộ; sẽ thử lại.');
-        jobs.push({t,file,wave,fileKey,waveKey,id:t.id,name:t.name,duration:t.duration||0,fileName:file.name||t.name,type:file.type||''});
-      }
-      if(version!==cloudVersion)throw new Error('Dữ liệu vừa thay đổi; sẽ thử đồng bộ lại.');
-      const state={version:2,collections:JSON.parse(JSON.stringify(collections)),activeCollection,trash:JSON.parse(JSON.stringify(trash)),autoUpload,tracks:jobs.map(({id,name,duration,fileName,type,fileKey,waveKey})=>({id,name,duration,fileName,type,fileKey,waveKey}))};
-      const res=await r2Request('/sync-state',{method:'PUT',headers:{'Content-Type':'application/json',...(cloudEtag?{'If-Match':cloudEtag}:{'If-None-Match':'*'})},body:JSON.stringify(state)});const etag=res.headers.get('ETag');if(!etag)throw new Error('Worker không trả phiên bản đồng bộ.');
-      cloudRemember(etag,true);
-      if(version===cloudVersion){
-        for(const job of jobs){if(job.already)continue;if(job.t.file!==job.file||job.t.waveData!==job.wave)throw new Error('Bài đã thay đổi; sẽ đồng bộ lại.');
-          Object.assign(job.t,{syncFileKey:job.fileKey,syncWaveKey:job.waveKey,cloudFileName:job.fileName,cloudType:job.type,_cloudSynced:true});await putTrack(job.t);
-        }
-        if(version===cloudVersion){cloudRemember(etag,false);cloudFingerprintBaseline();persistMeta();r2SetStatus('Đã đồng bộ lên R2; file tạm đã xóa, waveform được lưu để tải nhanh.');}
-      }
-    }
-    async function cloudCheck(force=''){
-      if(!ready||!r2Url||!r2Token||cloudPaused&&!force||(ghToken&&!force))return;if(r2Busy||busy||ghBusy){cloudSchedule(2000);return;}
-      r2Busy=true;try{
-        if(cloudOwner && cloudOwner!==r2Url){cloudEtag=null;cloudDirty=library.some(t=>!t._unknown);}
-        const health=await (await r2Request('/health')).json();if(health.syncVersion!==2)throw new Error('Worker cần cập nhật phiên bản đồng bộ mới.');
-        const remote=await cloudReadState(),hasLocal=collections.some(p=>p.ids?.length)||trash.length;
-        if(force==='pull'){if(!remote)throw new Error('R2 chưa có thư viện.');await cloudApply(remote);return;}
-        if(force==='push'){cloudEtag=remote?.etag||null;cloudDirty=true;cloudPaused=false;await cloudPush(true);return;}
-        if(remote && remote.etag!==cloudEtag){
-          if((cloudDirty||(!cloudEtag&&hasLocal))){cloudPaused=true;r2SetStatus('Xung đột dữ liệu. Chọn Dùng bản R2 hoặc Dùng bản máy; chưa xóa dữ liệu nào.');return;}
-          await cloudApply(remote);return;
-        }
-        if(!remote && cloudEtag){cloudPaused=true;r2SetStatus('Không tìm thấy thư viện R2 từng đồng bộ; dữ liệu trên máy được giữ lại.');return;}
-        if(!remote || cloudDirty){r2SetStatus('Đang đồng bộ thư viện lên R2…');await cloudPush();}
-      }catch(e){if(/412|phiên bản|đã đổi/.test(String(e.message||e))){cloudPaused=true;r2SetStatus('Xung đột hoặc Worker chưa cập nhật. Dữ liệu trên máy được giữ lại.');}else r2SetStatus('Chưa đồng bộ R2: '+(e.message||e)+'. Dữ liệu chưa đồng bộ vẫn lưu trên máy.');}
-      finally{r2Busy=false;if(cloudDirty&&!cloudPaused)cloudSchedule(10000);}
-    }
-    $('r2PullSync').onclick=async()=>{if(!r2Url||!r2Token||r2Busy||busy)return;if(!await confirmAction('Dùng thư viện R2 thay toàn bộ thư viện trên máy này? Mọi thay đổi chưa đồng bộ trên máy sẽ bị mất.',{bulk:true}))return;await cloudCheck('pull');};
-    $('r2PushSync').onclick=async()=>{if(!r2Url||!r2Token||r2Busy||busy)return;if(!await confirmAction('Dùng thư viện máy này thay trạng thái thư viện R2? Những thay đổi trên thiết bị khác có thể bị mất.',{bulk:true}))return;markCloudDirty();await cloudCheck('push');};
-    window.addEventListener('online',()=>{cloudSchedule(500);if(ready&&autoUpload&&currentTrackIndex<0&&playlist.length)openCollection(activeCollection,true);});document.addEventListener('visibilitychange',()=>{if(!document.hidden)cloudSchedule(1000);});
-    setInterval(()=>{if(!document.hidden&&!cloudDirty)cloudSchedule(0);},60000);
+    window.addEventListener('online',()=>{if(ready&&autoUpload&&currentTrackIndex<0&&playlist.length)openCollection(activeCollection,true);});
 
     // Repo riêng, token chỉ ở phiên trình duyệt. Không ghi token vào repo hoặc log.
     const ghRepo='nguyennhlat2004/Storage',ghBase='https://api.github.com/repos/'+ghRepo;
@@ -2510,10 +2356,10 @@
       const state=ghExpire({version:3,collections:JSON.parse(JSON.stringify(collections)),activeCollection,trash:JSON.parse(JSON.stringify(currentTrash)),autoUpload,tracks:jobs.map(({id,name,duration,fileName,type,fileSha,fileParts,waveSha})=>({id,name,duration,fileName,type,fileSha,fileParts,waveSha}))});
       const sha=await ghWriteState(state,snapshot.stateSha);ghRemember(sha,true);
       if(version===ghRevision){for(const job of jobs){if(job.t.file!==job.file||job.t.waveData!==job.wave)throw new Error('Bài vừa thay đổi; sẽ đồng bộ lại.');Object.assign(job.t,{ghFileSha:job.fileSha,ghFileParts:job.fileParts,ghWaveSha:job.waveSha,cloudFileName:job.fileName,cloudType:job.type});await putTrack(job.t);}
-        if(version===ghRevision){trash=state.trash;ghRemember(sha,false);cloudFingerprintBaseline();persistMeta();refreshTrashSelect();ghStatus('Đã đồng bộ lên repo. File trên máy được giữ để an toàn và phát offline.');}}
+        if(version===ghRevision){trash=state.trash;ghRemember(sha,false);cloudFingerprintBaseline();persistMeta();refreshTrashSelect();ghStatus('Đã đồng bộ lên repo. Các file đang có trên máy được giữ để phát offline.');}}
     }
     async function ghCheck(force=''){
-      if(!ready||!ghToken||ghPaused&&!force)return;if(ghBusy||busy||r2Busy){ghSchedule(2500);return;}ghBusy=true;
+      if(!ready||!ghToken||ghPaused&&!force)return;if(ghBusy||busy){ghSchedule(2500);return;}ghBusy=true;
       try{const repo=await ghJson('');if(repo.private!==true)throw new Error('Repo Storage không còn private; đã dừng để bảo vệ dữ liệu.');const snapshot=await ghSnapshot(),hasLocal=collections.some(p=>p.ids?.length)||trash.length;
         if(force==='pull'){if(!snapshot.state)throw new Error('Repo chưa có thư viện.');await ghApply(snapshot.state,snapshot.stateSha);return;}
         if(force==='push'){ghPaused=false;ghDirty=true;await ghPushState(snapshot,true);return;}
