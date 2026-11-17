@@ -232,6 +232,8 @@
     .picker-row {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch;min-width:0;}
     .picker-row input {width:100%;min-width:0;height:42px;padding:0 12px;background:#202127;border:1px solid #353741;border-radius:10px;color:var(--text);font:inherit;font-size:13px;outline:none;}
     .picker-row input:focus {border-color:#60a5fa;box-shadow:0 0 0 2px #3b82f633;}
+    .action-glyph {width:18px;height:18px;display:inline-block;vertical-align:middle;flex:none;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round;}
+    .icon-action {display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:42px;}
     .ui-action {min-height:42px;padding:0 15px;border:1px solid #353741;background:#262830;border-radius:10px;color:#e4e4e7;font-size:12px;font-weight:650;cursor:pointer;white-space:nowrap;}
     .ui-action:hover {background:#30333c;}
     .ui-action:focus-visible,.ui-select-button:focus-visible,.ui-option:focus-visible {outline:2px solid #60a5fa;outline-offset:2px;}
@@ -725,7 +727,7 @@
         tx.oncomplete = () => resolve(req?.result); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error('Giao dịch bị hủy'));
       });
     }
-    function putTrack(t) { if(deletingIds.has(t.id)) return Promise.resolve(); const current=library.find(x=>x.id===t.id),remote=!!(t._cloudSynced && t.syncFileKey && t.syncWaveKey);return transaction('tracks','readwrite',store => store.put({id:t.id,name:current?.name||t.name,file:remote?null:t.file,duration:t.duration,waveData:remote?null:(t.waveData || null),cloudKey:t.cloudKey || null,syncFileKey:t.syncFileKey||null,syncWaveKey:t.syncWaveKey||null,cloudFileName:t.cloudFileName||t.file?.name||null,cloudType:t.cloudType||t.file?.type||'',_cloudSynced:remote})); }
+    function putTrack(t) { if(deletingIds.has(t.id)) return Promise.resolve(); const current=library.find(x=>x.id===t.id),remote=!!(t._cloudSynced && t.syncFileKey && t.syncWaveKey);return transaction('tracks','readwrite',store => store.put({id:t.id,name:current?.name||t.name,file:remote?null:t.file,duration:t.duration,waveData:t.waveData || null,cloudKey:t.cloudKey || null,syncFileKey:t.syncFileKey||null,syncWaveKey:t.syncWaveKey||null,cloudFileName:t.cloudFileName||t.file?.name||null,cloudType:t.cloudType||t.file?.type||'',_cloudSynced:remote})); }
     function persistMeta() {
       if(!ready || !db) return;
       const active = collections.find(p => p.id === activeCollection);
@@ -885,7 +887,7 @@
     $('autoUploadToggle').onclick=()=>{
       autoUpload=!autoUpload;try{localStorage.setItem(autoUploadKey,String(autoUpload));}catch(e){notify('Không lưu được cài đặt Auto Upload: '+e.message);}
       updateAutoUploadToggle();markCloudDirty();
-      if(!autoUpload){++reloadToken;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;}
+      if(!autoUpload){++reloadToken;reloadInProgress=false;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;}
       if(autoUpload && ready && currentTrackIndex<0 && playlist.length)openCollection(activeCollection,true);
     };
     function makeTrashEntry(p,t,index){return {id:newId(),trackId:t.id,playlistId:p.id,playlistName:p.name,playlistSettings:p.settings||defaultSettings(),name:t.name,index,muted:(p.mutedIds||[]).includes(t.id),cue:p.cues?.[t.id]||null,skips:p.skips?.[t.id]||null,deletedAt:Date.now()};}
@@ -895,7 +897,7 @@
       const entries=collections.flatMap(p=>(p.id===activeCollection?playlist.map(t=>t.id):p.ids||[]).map((id,i)=>{const t=library.find(x=>x.id===id);return t?makeTrashEntry(p,t,i):null;}).filter(Boolean));
       if(!entries.length){$('uploadSettingsStatus').textContent='Không có bài trong playlist để xóa.';return;}
       if(!await confirmAction('Chuyển '+entries.length+' bài khỏi mọi playlist vào thùng rác 30 ngày? Tên playlist và cài đặt được giữ lại.',{bulk:true}))return;
-      busy=true;++libraryGeneration;++reloadToken;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;
+      busy=true;++libraryGeneration;++reloadToken;reloadInProgress=false;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;
       const nextCollections=collections.map(p=>({...p,ids:[],mutedIds:[],cues:{},skips:{},lastTrackId:null})),nextTrash=[...trash,...entries];
       markCloudDirty();try{await transaction('meta','readwrite',store=>store.put(metadataSnapshot(nextCollections,nextTrash)));
         clearPlayer();playlist=[];collections=nextCollections;trash=nextTrash;renderCollections();renderPlaylist();refreshTrashSelect();markCloudDirty();$('uploadSettingsStatus').textContent='Đã chuyển các bài vào thùng rác 30 ngày.';
@@ -905,34 +907,46 @@
       ++trackLoadToken; stopPlayback(); currentBuffer=null; pendingSeek=null;pendingCue=null;cueEditing=null;currentTrackIndex=-1;pausedAt=0; ++waveToken; waveData=null; waveImage=null; $('waveHint').textContent='Waveform sẽ được dựng khi bài hát tải xong.';
       songTitle.textContent='Chưa có bài hát';songTitle.classList.add('placeholder');currentTimeEl.textContent='0:00';durationTimeEl.textContent='0:00';updateCueUI();updateSkipUI();updateProgressUI();
     }
-    let reloadToken=0,reloadHideTimer=null;
-    function reloadProgress(done,total,fileDone){
-      $('reloadSummary').hidden=false;const all=total?Math.round(done/total*100):100,one=fileDone?100:0;
+    let reloadToken=0,reloadHideTimer=null,reloadInProgress=false;
+    function reloadProgress(done,total,fileRatio){
+      const ratio=Math.max(0,Math.min(1,Number(fileRatio)||0));
+      $('reloadSummary').hidden=false;const all=total?Math.round((done+ratio)/total*100):100,one=Math.round(ratio*100);
       for(const [prefix,n] of [['reloadTotal',all],['reloadFile',one]]){$(prefix+'Fill').style.transform=`scaleX(${n/100})`;$(prefix+'Percent').textContent=n+'%';$(prefix).setAttribute('aria-valuenow',String(n));}
     }
     async function ensureTrackLoaded(track){
       if(track.file)return track;if(track._loadJob)return track._loadJob;
       const job=(async()=>{let record=await transaction('tracks','readonly',store=>store.get(track.id));
         const syncFileKey=record?.syncFileKey||track.syncFileKey,syncWaveKey=record?.syncWaveKey||track.syncWaveKey;
-        if(!record?.file && syncFileKey && syncWaveKey && r2Url && r2Token){const file=await cloudDownloadFile(syncFileKey,record?.cloudFileName||track.name,record?.cloudType||'');const wave=await cloudDownloadWave(syncWaveKey);record={...record,id:track.id,name:record?.name||track.name,file,waveData:wave,syncFileKey,syncWaveKey,_cloudSynced:true};}
-        if(!record?.file && track.cloudKey && r2Url && r2Token){const file=await r2DownloadTrack(track.cloudKey,track.name,'');record={id:track.id,name:track.name,file,duration:track.duration||0,waveData:null,cloudKey:track.cloudKey};await transaction('tracks','readwrite',store=>store.put(record));}if(!record?.file)throw new Error('Không tìm thấy file đã lưu');
-        const knownName=track._unknown?null:track.name;Object.assign(track,record,{name:knownName||record.name||'Bài hát',buffer:null,_unknown:false});return track;
+        let fetchedWave=false;
+        if(!record?.file && syncFileKey && syncWaveKey && r2Url && r2Token){
+          const waveValid=record?.syncFileKey===syncFileKey&&record?.syncWaveKey===syncWaveKey&&record?.waveData?.version===2&&record.waveData.rms?.length;
+          const [file,wave]=await Promise.all([cloudDownloadFile(syncFileKey,record?.cloudFileName||track.name,record?.cloudType||''),waveValid?Promise.resolve(record.waveData):cloudDownloadWave(syncWaveKey)]);
+          fetchedWave=!waveValid;record={...record,id:track.id,name:record?.name||track.name,file,waveData:wave,syncFileKey,syncWaveKey,_cloudSynced:true};
+        }
+        if(track.file)return track; // Không ghi đè file mới được thay trong khi đang tải.
+        if(!record?.file && track.cloudKey && r2Url && r2Token){const file=await r2DownloadTrack(track.cloudKey,track.name,'');if(track.file)return track;record={id:track.id,name:track.name,file,duration:track.duration||0,waveData:null,cloudKey:track.cloudKey};await transaction('tracks','readwrite',store=>store.put(record));}if(!record?.file)throw new Error('Không tìm thấy file đã lưu');
+        const knownName=track._unknown?null:track.name;Object.assign(track,record,{name:knownName||record.name||'Bài hát',buffer:null,_unknown:false});
+        if(fetchedWave)try{await putTrack(track);}catch(e){notify('Không lưu được waveform để reload nhanh: '+e.message);}return track;
       })();track._loadJob=job;try{return await job;}finally{if(track._loadJob===job)track._loadJob=null;}
     }
     function openCollection(id,initial=false){
       if(!initial)persistMeta();clearPlayer();activeCollection=id;const p=collections.find(p=>p.id===id);
       playlist=(p?.ids||[]).map(id=>library.find(t=>t.id===id)).filter(Boolean);restoreConfig(p?.settings||defaultSettings());
-      renderCollections();renderPlaylist();updateSkipUI();const token=++reloadToken;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;
+      renderCollections();renderPlaylist();updateSkipUI();const token=++reloadToken;reloadInProgress=false;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;
       if(!playlist.length || (initial&&!autoUpload))return;
       ensurePlayableTrack();let selected=initial?playlist.findIndex(t=>t.id===p?.lastTrackId&&!isTrackMuted(t)):-1;if(selected<0)selected=playlist.findIndex(t=>!isTrackMuted(t));
       const target=playlist[selected];if(target)selectTrack(selected,false);
-      const order=target?[target,...playlist.filter(t=>t!==target)]:[...playlist];reloadProgress(0,order.length,false);
+      const order=target?[target,...playlist.filter(t=>t!==target)]:[...playlist];reloadInProgress=true;reloadProgress(0,order.length,0);
       (async()=>{let done=0,failed=0;
-        for(const track of order){if(token!==reloadToken)return;reloadProgress(done,order.length,false);
-          try{await ensureTrackLoaded(track);if(!track.waveData?.rms?.length)await ensureTrackWaveform(track);}catch(e){failed++;}if(token!==reloadToken)return;done++;reloadProgress(done,order.length,true);renderPlaylist();
+        for(const track of order){if(token!==reloadToken)return;reloadProgress(done,order.length,0);
+          let ratio=0;const previous=track._onWaveProgress;
+          const progress=value=>{previous?.(value);if(token===reloadToken){ratio=Math.max(ratio,Math.min(.99,value));reloadProgress(done,order.length,ratio);}};
+          track._onWaveProgress=progress;
+          try{await ensureTrackLoaded(track);if(!track.waveData?.rms?.length)await ensureTrackWaveform(track);}catch(e){failed++;}finally{if(track._onWaveProgress===progress)track._onWaveProgress=previous;}
+          if(token!==reloadToken)return;reloadProgress(done,order.length,1);done++;renderPlaylist();
           await new Promise(resolve=>setTimeout(resolve,0));
         }
-        if(failed)notify('Không thể reload '+failed+' bài trong playlist.');else reloadHideTimer=setTimeout(()=>{if(token===reloadToken)$('reloadSummary').hidden=true;},3000);
+        reloadInProgress=false;if(failed)notify('Không thể reload '+failed+' bài trong playlist.');else reloadHideTimer=setTimeout(()=>{if(token===reloadToken)$('reloadSummary').hidden=true;},3000);
       })();
     }
     function readFile(file, onProgress) {
@@ -1059,9 +1073,15 @@
       const jobs=files.map(file=>{
         const valid=file.size>0;
         const track=valid?{id:newId(),name:file.name.replace(/\.[^/.]+$/,''),file,buffer:null,duration:0,waveData:null}:null;
-        if(track){library.push(track);if(addToPlaylist && target)playlist.push(track);}
         return {file,track,ratio:0};
       });
+      // Lưu mọi file trước khi ghi playlist, không đợi giải mã từng bài.
+      // Nếu hết dung lượng, không tạo playlist trỏ đến file chưa được lưu.
+      try{await new Promise((resolve,reject)=>{const tx=db.transaction('tracks','readwrite'),store=tx.objectStore('tracks');
+        for(const {track:t} of jobs)if(t)store.put({id:t.id,name:t.name,file:t.file,duration:0,waveData:null,cloudKey:null,syncFileKey:null,syncWaveKey:null,cloudFileName:t.file.name,cloudType:t.file.type||'',_cloudSynced:false});
+        tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('Giao dịch bị hủy'));
+      });}catch(e){busy=false;panel.classList.add('failed');notify('Không lưu được file vào trình duyệt: '+(e.message||e)+'. Hãy kiểm tra dung lượng và thử lại.');return;}
+      jobs.forEach(({track})=>{if(track){library.push(track);if(addToPlaylist && target)playlist.push(track);}});
       const visual={total:{shown:0,target:0},file:{shown:0,target:0}};
       let progressFrame=null,lastProgressFrame=0;
       function drawProgress(now) {
@@ -1102,13 +1122,12 @@
           const {track,file}=job;
           try {
             if(!track)throw new Error('File rỗng hoặc không có âm thanh');
-            await putTrack(track);
             await ensureTrackWaveform(track,()=>decodeTrack(track));
             updateTrackDurationUI(track);
           }catch(e){failed++;notify('Lỗi '+file.name+': '+(e?.message||'Không thể xử lý'));}
           if(track)track._onWaveProgress=null;
           mark(job,1);
-          if(job!==jobs[jobs.length-1]) await new Promise(resolve=>setTimeout(resolve,400));
+          if(job!==jobs[jobs.length-1]) await new Promise(resolve=>setTimeout(resolve,0));
         }
       } finally {
         busy=false;updateBars();
@@ -1150,7 +1169,7 @@
       const target=collections.find(p=>p.id===$('historyPlaylistSelect').value);if(!target)return;
       const ids=target.id===activeCollection?playlist.map(t=>t.id):[...(target.ids||[])];if(!ids.length){notify('Không có bài để xóa.');return;}
       if(!await confirmAction('Chuyển '+ids.length+' bài trong playlist "'+target.name+'" vào thùng rác 30 ngày? Các playlist khác không bị thay đổi.',{bulk:ids.length>=5}))return;
-      busy=true;if(target.id===activeCollection){++reloadToken;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;}
+      busy=true;if(target.id===activeCollection){++reloadToken;reloadInProgress=false;clearTimeout(reloadHideTimer);$('reloadSummary').hidden=true;}
       const nextCollections=collections.map(p=>({...p,ids:p.id===target.id?[]:(p.id===activeCollection?playlist.map(t=>t.id):[...p.ids]),mutedIds:p.id===target.id?[]:[...(p.mutedIds||[])],cues:p.id===target.id?{}:{...(p.cues||{})},skips:p.id===target.id?{}:{...(p.skips||{})}}));
       const entries=ids.map((id,i)=>{const t=library.find(x=>x.id===id);return t?makeTrashEntry(target,t,i):null;}).filter(Boolean),nextTrash=[...trash,...entries];
       markCloudDirty();try{await transaction('meta','readwrite',store=>store.put(metadataSnapshot(nextCollections,nextTrash)));
@@ -1252,7 +1271,7 @@
       let bin=0,ch=0,position=0,peak=0,squares=0,maxRms=0;
       while(bin<count) {
         if(!valid())throw new Error('File đã thay đổi hoặc bị xóa');
-        const deadline=performance.now()+(isPlaying?1:3);
+        const deadline=performance.now()+(isPlaying?3:8);
         do {
           const from=Math.floor(bin*buffer.length/count),end=Math.floor((bin+1)*buffer.length/count);
           if(position<from) position=from;
@@ -1268,7 +1287,7 @@
           }
         } while(bin<count && performance.now()<deadline);
         onProgress(bin/count);
-        if(bin<count) await new Promise(resolve=>setTimeout(resolve,isPlaying?15:0));
+        if(bin<count) await new Promise(resolve=>setTimeout(resolve,isPlaying?4:0));
       }
       return {version:2,peaks,rms,maxRms};
     }
@@ -1323,12 +1342,12 @@
               timer=setTimeout(()=>{
                 if(!valid()){finish(new Error('File đã thay đổi hoặc bị xóa'));return;}
                 if(position>=buffer.length){worker.postMessage({kind:'finish'});return;}
-                const start=position,end=Math.min(buffer.length,start+32768),arrays=[];
+                const start=position,end=Math.min(buffer.length,start+262144),arrays=[];
                 try{
                   for(let c=0;c<buffer.numberOfChannels;c++)arrays.push(buffer.getChannelData(c).slice(start,end));
                   position=end;worker.postMessage({kind:'chunk',start,end,arrays},arrays.map(a=>a.buffer));
                 }catch(error){finish(error);}
-              },isPlaying?18:0);
+              },isPlaying?4:0);
             };
             worker.postMessage({kind:'init',length:buffer.length,channels:buffer.numberOfChannels});
           }catch(error){finish(error);}
@@ -1427,6 +1446,11 @@
           waveImageKey=key;
         }
         c.globalAlpha=0.6;c.drawImage(waveImage,0,0,w,h);c.globalAlpha=1;c.save();c.beginPath();c.rect(0,0,w*p,h);c.clip();c.drawImage(waveImage,0,0,w,h);c.restore();
+      }
+      // Các đoạn Skip chỉ có hiệu lực khi công tắc Skip Track đang bật.
+      for(const range of skipRanges()){
+        const a=Math.max(start,Math.min(end,range.start)),b=Math.max(start,Math.min(end,range.end));
+        if(b>a){const x=w*(a-start)/(end-start),width=w*(b-a)/(end-start);c.fillStyle='rgba(255,55,70,.34)';c.fillRect(x,0,width,h);c.fillStyle='rgba(255,90,100,.8)';c.fillRect(x,0,Math.max(1,width),2);}
       }
       if(p>0) {c.fillStyle='#77b2ff';c.fillRect(0,h-3,w*p,3);c.fillRect(Math.max(0,w*p-0.75),0,1.5,h);}
       const markers=cueEnabled?storedCue():null;
@@ -1551,15 +1575,16 @@
       const nums=parts.map(Number);if(nums.length>1&&nums[nums.length-1]>=60)return NaN;if(nums.length===3&&nums[1]>=60)return NaN;
       return nums.reduce((total,n)=>total*60+n,0);
     }
-    function skipRestart(){if(isPlaying&&currentBuffer){pausedAt=getCurrentTime();startBufferSource();updateProgressUI();}}
+    function skipRestart(){if(!playlist[currentTrackIndex])return;const time=getCurrentTime();applySeek({type:'seconds',value:time});updateProgressUI();}
     function updateSkipUI(){
       $('skipToggle').setAttribute('aria-checked',String(skipEnabled));$('skipPanel').hidden=!skipEnabled;
       const entries=skipTrackEntries(),list=$('skipList');list.replaceChildren();entries.forEach((range,i)=>{
         const row=document.createElement('div');row.className='skip-row';const number=document.createElement('span');number.textContent=String(i+1);
         const times=document.createElement('span');times.textContent=formatTime(range.start)+' – '+formatTime(range.end);
-        const del=document.createElement('button');del.type='button';del.textContent='Xóa';del.setAttribute('aria-label','Xóa đoạn '+(i+1));
+        const del=document.createElement('button');del.type='button';setActionIcon(del,'trash','Xóa đoạn '+(i+1));
         del.onclick=()=>{entries.splice(i,1);persistMeta();updateSkipUI();skipRestart();};row.append(number,times,del);list.append(row);
       });
+      drawWaveform();
     }
     $('skipToggle').onclick=()=>{skipEnabled=!skipEnabled;saveConfig();updateSkipUI();skipRestart();};
     $('skipUseStart').onclick=()=>{$('skipStart').value=formatTime(getCurrentTime());};
@@ -1657,7 +1682,7 @@
         const cue=usableCue();if(cue && (pausedAt<cue.a || pausedAt>=cue.b))pausedAt=cue.a;
         else if(currentBuffer && pausedAt>=currentBuffer.duration)pausedAt=0;
         isPlaying=true;updatePlayButton();startLoop();vinylDisc.classList.add('spinning');
-        if(currentBuffer)startBufferSource();
+        if(currentBuffer)startBufferSource();else decodeSelectedTrack(playlist[currentTrackIndex],trackLoadToken);
       } catch(e){isPlaying=false;stopCurrentSource();stopLoop();updatePlayButton();notify('Không phát được: '+e.message);}
     }
     function playPause() {
@@ -1669,7 +1694,10 @@
       const duration=currentDuration();
       if(!duration){pendingSeek=seek;return;}
       const seconds=seek.type==='fraction'?seek.value*duration:seek.value;
-      pausedAt=Math.max(0,Math.min(duration,seconds));pendingSeek=null;
+      pausedAt=Math.max(0,Math.min(duration,seconds));
+      // Cả tua chạm, kéo, phím và nút đều đi qua đây, kể cả khi đang tạm dừng.
+      for(const range of skipRanges())if(pausedAt>=range.start && pausedAt<range.end)pausedAt=Math.min(duration,range.end);
+      pendingSeek=null;
       if(isPlaying && currentBuffer)startBufferSource();
     }
     function seekTo(progress) {
@@ -1724,8 +1752,36 @@
 
     async function addFilesToPlaylist(files) { await importFiles(Array.from(files), true); }
 
+    // Icon nội tuyến: không cần tải API/CDN, vẫn có tên cho trình đọc màn hình.
+    const iconPaths={
+      plus:'<path d="M12 5v14M5 12h14"/>', folderPlus:'<path d="M3 6h7l2 2h9v11H3zM15 10v7m-3.5-3.5h7"/>',
+      trash:'<path d="M4 7h16M9 4h6M6 7l1 13h10l1-13M10 10v7m4-7v7"/>',
+      trashAll:'<path d="M3 7h14M7 4h6M5 7l1 13h8l1-13M9 10v7m3-7v7M19 9v10m-2-8h4"/>',
+      edit:'<path d="M4 20l4-.8L20 7l-3-3L5 16zM14 7l3 3"/>', check:'<path d="M4 12l5 5L20 6"/>',
+      restore:'<path d="M4 9V4m0 5h5M5 9a8 8 0 1 1-1 6"/>', reset:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"/>',
+      upload:'<path d="M12 16V4m-4 4 4-4 4 4M4 15v5h16v-5"/>', download:'<path d="M12 4v12m-4-4 4 4 4-4M4 19v1h16v-1"/>',
+      connect:'<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+      disconnect:'<path d="M9 15l-1 1a4 4 0 0 1-6-6l3-3a4 4 0 0 1 6 0M15 9l1-1a4 4 0 0 1 6 6l-3 3a4 4 0 0 1-6 0M3 3l18 18"/>',
+      list:'<path d="M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1"/>',
+      useStart:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l-3 2M2 12h4"/>',
+      useEnd:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2M18 12h4"/>'
+    };
+    function actionIcon(kind){return '<svg class="action-glyph" aria-hidden="true" viewBox="0 0 24 24">'+iconPaths[kind]+'</svg>';}
+    function setActionIcon(button,kind,label){if(!button)return;button.classList.add('icon-action');button.setAttribute('aria-label',label);button.title=label;button.innerHTML=actionIcon(kind);}
+    function initializeActionIcons(){
+      const actions={deletePlaylist:['trash','Xóa playlist đang chọn'],createPlaylist:['folderPlus','Tạo playlist'],editPlaylist:['edit','Sắp xếp playlist'],addTrackBtn:['plus','Thêm bài hát'],
+        skipUseStart:['useStart','Lấy thời gian bắt đầu'],skipUseEnd:['useEnd','Lấy thời gian kết thúc'],skipAdd:['plus','Thêm đoạn Skip Track'],
+        clearPlaylistHistory:['trash','Xóa lịch sử bài trong playlist'],resetConfig:['reset','Đặt lại EQ, volume, speed và lặp'],
+        deleteCueConfig:['trash','Xóa Cue Duo của bài đã chọn'],deleteAllCueConfig:['trashAll','Xóa tất cả Cue Duo'],
+        deleteSkipConfig:['trash','Xóa Skip Track của bài đã chọn'],deleteAllSkipConfig:['trashAll','Xóa tất cả Skip Track'],
+        deleteSoundSettings:['trash','Xóa cài đặt playlist đã chọn'],deleteAllSoundSettings:['trashAll','Xóa cài đặt của tất cả playlist'],
+        deleteUploads:['trashAll','Xóa Upload'],restoreTrash:['restore','Khôi phục bài đã xóa'],
+        r2Connect:['connect','Kết nối R2'],r2Disconnect:['disconnect','Ngắt R2'],r2PullSync:['download','Dùng bản R2'],r2PushSync:['upload','Dùng bản máy'],
+        r2Backup:['upload','Sao lưu playlist đang chọn'],r2List:['list','Tải danh sách bản sao lưu'],r2Restore:['restore','Khôi phục thành playlist mới'],exportBtn:['download','Xuất file âm thanh']};
+      for(const [id,[kind,label]] of Object.entries(actions))setActionIcon($(id),kind,label);
+    }
     let playlistEdit=false;
-    $('editPlaylist').onclick=()=>{playlistEdit=!playlistEdit;$('playlistTable').classList.toggle('editing',playlistEdit);$('editPlaylist').setAttribute('aria-pressed',String(playlistEdit));$('editPlaylist').textContent=playlistEdit?'Xong':'Edit';renderPlaylist();};
+    $('editPlaylist').onclick=()=>{playlistEdit=!playlistEdit;$('playlistTable').classList.toggle('editing',playlistEdit);$('editPlaylist').setAttribute('aria-pressed',String(playlistEdit));setActionIcon($('editPlaylist'),playlistEdit?'check':'edit',playlistEdit?'Xong sắp xếp':'Sắp xếp playlist');renderPlaylist();};
     function renderPlaylist() {
       persistMeta();
       refreshCueDeleteTracks();refreshSkipDeleteTracks();
@@ -1738,7 +1794,7 @@
         const muted=isTrackMuted(t); if(muted) row.classList.add('muted');
         row.innerHTML = `<td>${playlistEdit?`<button type="button" class="edit-handle" aria-label="Kéo để sắp xếp bài ${escapeHTML(t.name)}" title="Kéo để sắp xếp">⋮⋮</button>`:i+1}</td><td title="${escapeHTML(t.name)}">${escapeHTML(truncateName(t.name,20))}</td><td>${formatDuration(t.duration)}</td>
         <td style="display:flex;gap:2px;justify-content:flex-end;">
-          <button class="action-btn mute-btn" data-index="${i}" aria-pressed="${muted}" aria-label="${muted ? 'Unmute' : 'Mute'} ${escapeHTML(t.name)}" title="${muted ? 'Bỏ qua: bật lại bài này' : 'Bỏ qua bài này'}">${muted ? 'Unmute' : 'Mute'}</button>
+          <button class="action-btn mute-btn" data-index="${i}" aria-pressed="${muted}" aria-label="${muted ? 'Unmute' : 'Mute'} ${escapeHTML(t.name)}" title="${muted ? 'Bỏ qua: bật lại bài này' : 'Bỏ qua bài này'}"><i class="fa-solid ${muted ? 'fa-volume-xmark' : 'fa-volume-high'}" aria-hidden="true"></i></button>
           <button class="action-btn rename-btn" data-index="${i}" aria-label="Đổi tên bài hát" title="Đổi tên"><i class="fa-solid fa-pen"></i></button>
           <button class="action-btn replace-btn" data-index="${i}" aria-label="Thay file bài hát" title="Thay file"><i class="fa-solid fa-arrow-up-from-bracket"></i></button>
           <button class="action-btn delete-btn" data-index="${i}" aria-label="Xóa bài khỏi playlist" title="Xóa bài"><i class="fa-solid fa-trash"></i></button>
@@ -1807,6 +1863,31 @@
       } else renderPlaylist();
       notify('Đã Mute và bỏ qua: '+track.name);
     }
+    function decodeSelectedTrack(track,token){
+      if(track._selectedDecode?.token===token)return track._selectedDecode.promise;
+      let ownProgress=null,failed=false;const progressToken=reloadToken;
+      if(!busy&&!reloadInProgress){const previous=track._onWaveProgress;let ratio=0;
+        ownProgress=value=>{previous?.(value);if(progressToken===reloadToken){ratio=Math.max(ratio,Math.min(.98,value));reloadProgress(0,1,ratio);}};
+        ownProgress.previous=previous;track._onWaveProgress=ownProgress;clearTimeout(reloadHideTimer);reloadProgress(0,1,0);
+      }
+      const promise=decodeTrack(track).then(buffer=>{
+        if(token!==trackLoadToken || playlist[currentTrackIndex]!==track)return;
+        currentBuffer=buffer;track.duration=buffer.duration;durationTimeEl.textContent=formatDuration(buffer.duration);updateTrackDurationUI(track);
+        const c=storedCue();if(c && !Number.isFinite(c.b)){c.b=buffer.duration;persistMeta();}
+        if(pendingCue && pendingCue.trackId===track.id){const pending=pendingCue;pendingCue=null;cueEditing=pending.point;placeCue(pending.fraction);}
+        if(pendingSeek){const seek=pendingSeek;pendingSeek=null;applySeek(seek);}
+        else if(isPlaying)startBufferSource();
+        updateCueUI();updateProgressUI();putTrack(track).catch(e=>notify('Không lưu được thời lượng: '+e.message));
+      }).catch(e=>{
+        failed=true;if(token!==trackLoadToken || playlist[currentTrackIndex]!==track)return;
+        stopCurrentSource();isPlaying=false;stopLoop();updatePlayButton();vinylDisc.classList.remove('spinning');
+        notify('Không thể giải mã âm thanh: '+(e.message||e));
+      }).finally(()=>{if(track._selectedDecode?.promise===promise)track._selectedDecode=null;
+        if(ownProgress){if(track._onWaveProgress===ownProgress)track._onWaveProgress=ownProgress.previous;
+          if(progressToken===reloadToken&&!reloadInProgress){if(!failed)reloadProgress(0,1,1);reloadHideTimer=setTimeout(()=>{if(progressToken===reloadToken&&!reloadInProgress)$('reloadSummary').hidden=true;},3000);}}
+      });
+      track._selectedDecode={token,promise};return promise;
+    }
     function selectTrack(i, autoplay = true){
       if(i<0 || i>=playlist.length)return;
       if(isTrackMuted(playlist[i])){
@@ -1823,20 +1904,8 @@
       songTitle.textContent=truncateName(track.name);songTitle.classList.remove('placeholder');
       durationTimeEl.textContent=formatDuration(track.duration);const cue=usableCue();if(cue)pausedAt=cue.a;updateProgressUI();renderPlaylist();
       if(autoplay)playCurrentTrack();
-      // Giải mã cho Web Audio độc lập với quá trình vẽ waveform.
-      decodeTrack(track).then(buffer=>{
-        if(token!==trackLoadToken || playlist[currentTrackIndex]!==track)return;
-        currentBuffer=buffer;track.duration=buffer.duration;durationTimeEl.textContent=formatDuration(buffer.duration);updateTrackDurationUI(track);
-        const c=storedCue();if(c && !Number.isFinite(c.b)){c.b=buffer.duration;persistMeta();}
-        if(pendingCue && pendingCue.trackId===track.id){const pending=pendingCue;pendingCue=null;cueEditing=pending.point;placeCue(pending.fraction);}
-        if(pendingSeek){const seek=pendingSeek;pendingSeek=null;applySeek(seek);}
-        else if(isPlaying)startBufferSource();
-        updateCueUI();updateProgressUI();putTrack(track).catch(e=>notify('Không lưu được thời lượng: '+e.message));
-      }).catch(e=>{
-        if(token!==trackLoadToken || playlist[currentTrackIndex]!==track)return;
-        stopCurrentSource();isPlaying=false;stopLoop();updatePlayButton();vinylDisc.classList.remove('spinning');
-        notify('Không thể giải mã âm thanh: '+(e.message||e));
-      });
+      // Có waveform lưu sẵn thì chỉ decode khi người dùng phát.
+      if(autoplay || !track.waveData?.rms?.length)decodeSelectedTrack(track,token);
       prepareWaveform(track).catch(e=>{if(playlist[currentTrackIndex]===track){$('waveHint').textContent='Không thể tạo waveform: '+e.message;notify('Lỗi waveform: '+e.message);}});
     }
 
@@ -2261,8 +2330,10 @@
       const nextCollections=data.collections,nextTrash=data.trash,nextActive=nextCollections.some(p=>p.id===data.activeCollection)?data.activeCollection:nextCollections[0].id;
       const records=data.tracks.map(t=>({id:t.id,name:String(t.name||'Bài hát').slice(0,200),file:null,duration:Number(t.duration)||0,waveData:null,syncFileKey:t.fileKey,syncWaveKey:t.waveKey,cloudFileName:String(t.fileName||'audio').slice(0,200),cloudType:String(t.type||'').slice(0,100),_cloudSynced:true}));
       const state={id:'state',collections:nextCollections,activeCollection:nextActive,trash:nextTrash,trackNames:Object.fromEntries(records.map(t=>[t.id,t.name])),trackCloudKeys:{}};
-      busy=true;document.querySelector('.player-card').inert=true;cloudSuspend=true;++reloadToken;clearTimeout(reloadHideTimer);try{
-        await new Promise((resolve,reject)=>{const tx=db.transaction(['tracks','meta'],'readwrite');const store=tx.objectStore('tracks');store.clear();records.forEach(t=>store.put(t));tx.objectStore('meta').put(state);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('Không lưu được thư viện'));});
+      busy=true;document.querySelector('.player-card').inert=true;cloudSuspend=true;++reloadToken;reloadInProgress=false;clearTimeout(reloadHideTimer);try{
+        await new Promise((resolve,reject)=>{const tx=db.transaction(['tracks','meta'],'readwrite');const store=tx.objectStore('tracks');
+          records.forEach(t=>{const get=store.get(t.id);get.onsuccess=()=>{const prev=get.result;if(prev?.syncFileKey===t.syncFileKey&&prev?.syncWaveKey===t.syncWaveKey&&prev.waveData?.version===2)t.waveData=prev.waveData;store.put(t);};});
+          store.clear();tx.objectStore('meta').put(state);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('Không lưu được thư viện'));});
         clearPlayer();library=records.map(t=>({...t,buffer:null}));collections=nextCollections;trash=nextTrash;activeCollection=nextActive;
         if(typeof data.autoUpload==='boolean'){autoUpload=data.autoUpload;try{localStorage.setItem(autoUploadKey,String(autoUpload));}catch(e){}updateAutoUploadToggle();}
         cloudRemember(remote.etag,false);cloudPaused=false;cloudFingerprintBaseline();openCollection(activeCollection,true);r2SetStatus('Đã tải thư viện từ R2.');
@@ -2293,7 +2364,7 @@
         for(const job of jobs){if(job.already)continue;if(job.t.file!==job.file||job.t.waveData!==job.wave)throw new Error('Bài đã thay đổi; sẽ đồng bộ lại.');
           Object.assign(job.t,{syncFileKey:job.fileKey,syncWaveKey:job.waveKey,cloudFileName:job.fileName,cloudType:job.type,_cloudSynced:true});await putTrack(job.t);
         }
-        if(version===cloudVersion){cloudRemember(etag,false);cloudFingerprintBaseline();persistMeta();r2SetStatus('Đã đồng bộ lên R2; file và waveform tạm đã xóa khỏi bộ nhớ lưu trên máy.');}
+        if(version===cloudVersion){cloudRemember(etag,false);cloudFingerprintBaseline();persistMeta();r2SetStatus('Đã đồng bộ lên R2; file tạm đã xóa, waveform được lưu để tải nhanh.');}
       }
     }
     async function cloudCheck(force=''){
@@ -2516,6 +2587,7 @@
     updateAutoUploadToggle();
     restoreConfig(defaultSettings());
     initializeLibrary();
+    initializeActionIcons();
     drawEQBars(); drawWaveform();
   })();
 </script>
