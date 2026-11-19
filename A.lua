@@ -5673,21 +5673,67 @@ if TabTool then
             return ans
         end
 
+        local function trConfirmYes()
+            local yes = nil
+            pcall(function()
+                yes = player.PlayerGui.GameGui.Screen.Middle.InstantTraitRoll.Confirm.Items.Items.Items.Buttons.Items.Yes
+            end)
+            if yes and isVisible("GameGui.Screen.Middle.InstantTraitRoll.Confirm") and trShown(yes, nil) then
+                return yes
+            end
+            return nil
+        end
+
+        local function trRevealSkip()
+            local skip = nil
+            pcall(function()
+                skip = player.PlayerGui.TraitRevealControls.Skip
+            end)
+            if skip and isVisible("TraitRevealControls.Skip") then
+                return skip
+            end
+            return nil
+        end
+
         local function trDoRoll(btn, list)
             local _, before = trCurrent(list)
             pressGuiOnce(btn)
             local t0 = clockNow()
+            local deadline = t0 + 6
             local last, lastChange, changed = before, t0, false
-            while clockNow() - t0 < 6 do
+            local lastYes, lastSkip = -1000, -1000
+            while clockNow() < deadline and clockNow() - t0 < 30 do
                 task.wait(0.1)
-                local _, now = trCurrent(list)
-                if now ~= last then
-                    changed = true
-                    last = now
-                    lastChange = clockNow()
+                local busy = false
+                local yes = trConfirmYes()
+                if yes then
+                    busy = true
+                    if clockNow() - lastYes >= 0.6 then
+                        lastYes = clockNow()
+                        pressGuiOnce(yes)
+                    end
                 end
-                if changed and clockNow() - lastChange >= 0.8 then
-                    break
+                local skip = trRevealSkip()
+                if skip then
+                    busy = true
+                    if clockNow() - lastSkip >= 0.6 then
+                        lastSkip = clockNow()
+                        pressGuiOnce(skip)
+                    end
+                end
+                if busy then
+                    deadline = clockNow() + 6
+                    lastChange = clockNow()
+                else
+                    local _, now = trCurrent(list)
+                    if now ~= "" and now ~= last then
+                        changed = true
+                        last = now
+                        lastChange = clockNow()
+                    end
+                    if changed and clockNow() - lastChange >= 0.8 then
+                        break
+                    end
                 end
             end
             return changed
