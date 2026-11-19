@@ -4900,6 +4900,10 @@ local TabMain = nil
 if not isLobby then
     TabMain = Window:MakeTab({"Main", "home"})
 end
+local TabTool = nil
+if isLobby then
+    TabTool = Window:MakeTab({"Tool", "wrench"})
+end
 local TabSetting = Window:MakeTab({"Setting", "settings"})
 
 local radioactiveRampageToggle = nil
@@ -5109,6 +5113,97 @@ if not isLobby then
             autoReplayEnabled = Value == true
         end
     })
+
+    local function gfxSetup()
+        local gfx = {on = true, level = 3, mute = true, last = -1000, busy = false}
+        local gfxLevels = {Auto = 1, Low = 2, Normal = 3, High = 4}
+
+        local function gfxRead()
+            local v = nil
+            pcall(function()
+                v = player:GetAttribute("st_graphics")
+            end)
+            if v == nil then
+                pcall(function()
+                    local o = player:FindFirstChild("st_graphics", true)
+                    if o and o:IsA("ValueBase") then
+                        v = o.Value
+                    end
+                end)
+            end
+            return tonumber(v)
+        end
+
+        TabSetting:AddToggle({
+            Name = "Auto Set Graphic",
+            Default = true,
+            Flag = "AutoSetGraphic",
+            Callback = function(Value)
+                gfx.on = Value == true
+                gfx.last = -1000
+            end
+        })
+
+        TabSetting:AddDropdown({
+            Name = "Graphic Quality",
+            Options = {"Auto", "Low", "Normal", "High"},
+            Default = "Normal",
+            Flag = "GraphicQuality",
+            Callback = function(Value)
+                gfx.level = gfxLevels[tostring(Value)] or 3
+                gfx.last = -1000
+            end
+        })
+
+        TabSetting:AddToggle({
+            Name = "Auto Mute",
+            Default = true,
+            Flag = "AutoMute",
+            Callback = function(Value)
+                gfx.mute = Value == true
+            end
+        })
+
+        task.spawn(function()
+            while true do
+                if autoFarmEnabled then
+                    if gfx.on and not gfx.busy then
+                        local cur = gfxRead()
+                        local now = clockNow()
+                        local due = false
+                        if cur ~= nil then
+                            due = cur ~= gfx.level and now - gfx.last >= 2
+                        else
+                            due = now - gfx.last >= 10
+                        end
+                        if due then
+                            gfx.last = now
+                            gfx.busy = true
+                            task.spawn(function()
+                                pcall(function()
+                                    local r = getRemote("ChangeSetting")
+                                    if r then
+                                        r:InvokeServer("st_graphics", gfx.level)
+                                    end
+                                end)
+                                gfx.busy = false
+                            end)
+                        end
+                    end
+                    if gfx.mute then
+                        pcall(function()
+                            local gs = UserSettings():GetService("UserGameSettings")
+                            if gs.MasterVolume > 0 then
+                                gs.MasterVolume = 0
+                            end
+                        end)
+                    end
+                end
+                task.wait(0.5)
+            end
+        end)
+    end
+    gfxSetup()
 end
 
 TabSetting:AddToggle({
@@ -5247,6 +5342,510 @@ if not isLobby then
             end
         end
     })
+end
+
+if TabTool then
+    local function trSetup()
+        local TR = {on = false, run = 0, rolls = 0, fails = 0, maxRolls = 0, status = "Off", saved = {}, byLabel = {}, labelOf = {}, info = {}, rejected = {}, selRef = nil, dropdown = nil, toggle = nil, cur = "", file = "NexusStella_Trait.json"}
+
+        pcall(function()
+            if fileExists(TR.file) then
+                local raw = readFileSafe(TR.file)
+                local data = raw and raw ~= "" and HttpService:JSONDecode(raw)
+                if type(data) == "table" and type(data.targets) == "table" then
+                    for _, id in ipairs(data.targets) do
+                        TR.saved[tostring(id)] = true
+                    end
+                end
+            end
+        end)
+
+        local function trSave()
+            pcall(function()
+                local list = {}
+                for id, v in pairs(TR.saved) do
+                    if v then
+                        list[#list + 1] = id
+                    end
+                end
+                table.sort(list)
+                writeFileSafe(TR.file, HttpService:JSONEncode({targets = list}))
+            end)
+        end
+
+        local function trTrim(s)
+            return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+        end
+
+        local function trNorm(s)
+            return string.lower((trTrim(s):gsub("%s+", " ")))
+        end
+
+        local function trText(o)
+            local t = ""
+            pcall(function()
+                t = tostring(o.Text or "")
+            end)
+            pcall(function()
+                local ct = o.ContentText
+                if type(ct) == "string" and ct ~= "" then
+                    t = ct
+                end
+            end)
+            return trTrim(t)
+        end
+
+        local function trRoll()
+            local r = nil
+            pcall(function()
+                r = player.PlayerGui.GameGui.Screen.Middle.InstantTraitRoll.Roll
+            end)
+            return r
+        end
+
+        local function trListFrame()
+            local f = nil
+            pcall(function()
+                f = trRoll().Frame.Inventory.Inventory.Frame.Items.Items.ScrollingFrame
+            end)
+            return f
+        end
+
+        local function trShown(o, stop)
+            local ok, res = pcall(function()
+                local cur = o
+                while cur and cur ~= stop do
+                    if cur:IsA("GuiObject") and cur.Visible ~= true then
+                        return false
+                    end
+                    cur = cur.Parent
+                end
+                return true
+            end)
+            return ok and res == true
+        end
+
+        local function trReadList()
+            local out = {}
+            local sf = trListFrame()
+            if not sf then
+                return out
+            end
+            pcall(function()
+                for _, c in ipairs(sf:GetChildren()) do
+                    local id = tostring(c.Name)
+                    if id:sub(1, 3) == "tr_" then
+                        local name, odds = nil, nil
+                        for _, d in ipairs(c:GetDescendants()) do
+                            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                                local t = trText(d)
+                                local p = t:match("^([%d%.]+)%s*%%$")
+                                if p then
+                                    odds = tonumber(p)
+                                elseif t ~= "" and not t:match("^[%d%.,%%%s/x%+%-]+$") and (name == nil or #t > #name) then
+                                    name = t
+                                end
+                            end
+                        end
+                        local order = 0
+                        pcall(function()
+                            order = tonumber(c.LayoutOrder) or 0
+                        end)
+                        out[#out + 1] = {id = id, name = name or id:sub(4), odds = odds, order = order}
+                    end
+                end
+            end)
+            table.sort(out, function(a, b)
+                if a.order ~= b.order then
+                    return a.order < b.order
+                end
+                return a.id < b.id
+            end)
+            return out
+        end
+
+        local function trMatch(cur, name)
+            local a, b = trNorm(cur), trNorm(name)
+            if a == "" or b == "" then
+                return false
+            end
+            if a == b then
+                return true
+            end
+            if a:sub(1, #b) == b then
+                return a:sub(#b + 1):match("^ [ivx]+$") ~= nil
+            end
+            return false
+        end
+
+        local function trFind(list, nm)
+            local best = nil
+            for _, e in ipairs(list) do
+                if trMatch(nm, e.name) and (best == nil or #e.name > #best.name) then
+                    best = e
+                end
+            end
+            return best
+        end
+
+        local function trCurrent(list)
+            local roll = trRoll()
+            if not roll then
+                return nil, ""
+            end
+            local sf = trListFrame()
+            local nameOnly, digitHit = nil, nil
+            local found, foundFull = nil, nil
+            pcall(function()
+                for _, d in ipairs(roll:GetDescendants()) do
+                    if d:IsA("TextLabel") and not (sf and d:IsDescendantOf(sf)) and trShown(d, roll) then
+                        local t = trText(d)
+                        local nm = t:match("^(.-)%s*:")
+                        if nm and #nm >= 2 and #nm <= 48 then
+                            if list and trFind(list, nm) then
+                                found, foundFull = nm, t
+                                return
+                            end
+                            if not digitHit and t:match("^.-:%s*[%+%-]?%d") then
+                                digitHit = {nm, t}
+                            end
+                        elseif list and not nameOnly and t ~= "" and #t <= 48 and trFind(list, t) then
+                            nameOnly = t
+                        end
+                    end
+                end
+            end)
+            if found then
+                return found, foundFull
+            end
+            if digitHit then
+                return digitHit[1], digitHit[2]
+            end
+            if nameOnly then
+                return nameOnly, nameOnly
+            end
+            return nil, ""
+        end
+
+        local function trButton()
+            local roll = trRoll()
+            if not roll then
+                return nil, nil
+            end
+            local sf = trListFrame()
+            local best, bestScore, bestText = nil, 0, nil
+            pcall(function()
+                for _, d in ipairs(roll:GetDescendants()) do
+                    if d:IsA("GuiButton") and not (sf and d:IsDescendantOf(sf)) and trShown(d, roll) then
+                        local nm = string.lower(tostring(d.Name))
+                        local tx = readGuiText(d)
+                        if not (nm:find("auto") or nm:find("close") or tx:find("tự động", 1, true) or tx:find("auto", 1, true)) then
+                            local score = 0
+                            if nm:find("roll") then
+                                score = score + 2
+                            end
+                            if tx:find("cuộn", 1, true) or tx:find("roll", 1, true) then
+                                score = score + 3
+                            end
+                            if score > bestScore then
+                                best, bestScore, bestText = d, score, tx
+                            end
+                        end
+                    end
+                end
+            end)
+            local cost = nil
+            if bestText then
+                for n in bestText:gmatch("%d+") do
+                    cost = tonumber(n)
+                end
+            end
+            return best, cost
+        end
+
+        local function trLabel(e)
+            local lb = TR.labelOf[e.id]
+            if lb then
+                return lb
+            end
+            lb = e.name
+            if e.odds then
+                lb = lb .. " (" .. tostring(e.odds) .. "%)"
+            end
+            if TR.byLabel[lb] and TR.byLabel[lb] ~= e.id then
+                lb = lb .. " [" .. e.id:sub(4) .. "]"
+            end
+            TR.labelOf[e.id] = lb
+            TR.byLabel[lb] = e.id
+            return lb
+        end
+
+        local function trSync(list)
+            local added = {}
+            for _, e in ipairs(list) do
+                local had = TR.labelOf[e.id] ~= nil
+                TR.info[e.id] = e
+                local lb = trLabel(e)
+                if not had then
+                    added[#added + 1] = lb
+                    if TR.selRef and TR.saved[e.id] then
+                        TR.selRef[lb] = true
+                    end
+                end
+            end
+            if #added > 0 and TR.dropdown then
+                pcall(function()
+                    TR.dropdown:Set(added, true)
+                end)
+            end
+        end
+
+        local function trTargets(list)
+            local out = {}
+            for _, e in ipairs(list) do
+                if TR.saved[e.id] then
+                    out[#out + 1] = e
+                end
+            end
+            return out
+        end
+
+        local function trIsBest(hit, tg)
+            if #tg <= 1 then
+                return true
+            end
+            if not hit.odds then
+                return false
+            end
+            for _, e in ipairs(tg) do
+                if e.id ~= hit.id and (not e.odds or e.odds < hit.odds) then
+                    return false
+                end
+            end
+            return true
+        end
+
+        local function trStop(msg)
+            TR.on = false
+            TR.run = TR.run + 1
+            TR.status = msg
+            setToggleSilent(TR.toggle, false)
+        end
+
+        local function trAsk(full)
+            local ans = nil
+            pcall(function()
+                local g = game:GetService("CoreGui"):FindFirstChild("redz Library V5")
+                if not g and gethui then
+                    g = gethui():FindFirstChild("redz Library V5")
+                end
+                if g then
+                    g.Enabled = true
+                end
+            end)
+            local ok, dlg = pcall(function()
+                return Window:Dialog({
+                    Title = "Auto Roll Trait",
+                    Text = "Ra: " .. full .. "\nBỏ trait này để roll tiếp lấy trait khác trong list?",
+                    Options = {
+                        {"Roll tiếp", function()
+                            ans = "roll"
+                        end},
+                        {"Giữ & Dừng", function()
+                            ans = "keep"
+                        end}
+                    }
+                })
+            end)
+            if not ok or not dlg then
+                return "keep"
+            end
+            local id = TR.run
+            while ans == nil and TR.on and TR.run == id do
+                task.wait(0.2)
+            end
+            if ans == nil then
+                pcall(function()
+                    dlg:Close()
+                end)
+                return "keep"
+            end
+            return ans
+        end
+
+        local function trDoRoll(btn, list)
+            local _, before = trCurrent(list)
+            pressGuiOnce(btn)
+            local t0 = clockNow()
+            local last, lastChange, changed = before, t0, false
+            while clockNow() - t0 < 6 do
+                task.wait(0.1)
+                local _, now = trCurrent(list)
+                if now ~= last then
+                    changed = true
+                    last = now
+                    lastChange = clockNow()
+                end
+                if changed and clockNow() - lastChange >= 0.8 then
+                    break
+                end
+            end
+            return changed
+        end
+
+        local function trLoop(id)
+            TR.rolls, TR.fails, TR.rejected = 0, 0, {}
+            while TR.on and TR.run == id do
+                local roll = trRoll()
+                if not roll or not isVisible("GameGui.Screen.Middle.InstantTraitRoll.Roll") then
+                    TR.status = "Mở bảng roll trait và chọn unit"
+                    task.wait(0.5)
+                else
+                    local list = trReadList()
+                    trSync(list)
+                    local tg = trTargets(list)
+                    local nm, full = trCurrent(list)
+                    TR.cur = full
+                    local hit = nm and trFind(tg, nm) or nil
+                    if #tg == 0 then
+                        TR.status = "Chưa chọn trait"
+                        task.wait(0.5)
+                    elseif hit and not TR.rejected[hit.id] then
+                        if trIsBest(hit, tg) then
+                            trStop("Giữ " .. full .. " (xịn nhất) | " .. TR.rolls .. " lần")
+                            return
+                        end
+                        TR.status = "Ra " .. full .. " | chờ chọn"
+                        if trAsk(full) ~= "roll" or not TR.on or TR.run ~= id then
+                            trStop("Giữ " .. full .. " | " .. TR.rolls .. " lần")
+                            return
+                        end
+                        TR.rejected[hit.id] = true
+                    elseif TR.maxRolls > 0 and TR.rolls >= TR.maxRolls then
+                        trStop("Đủ " .. TR.maxRolls .. " lần roll | " .. full)
+                        return
+                    else
+                        local btn, cost = trButton()
+                        local tokens = getTraitTokensAmount()
+                        if not btn then
+                            TR.status = "Không thấy nút Cuộn"
+                            task.wait(0.5)
+                        elseif cost and tokens and tokens < cost then
+                            trStop("Hết Trait Token (" .. tostring(tokens) .. "/" .. tostring(cost) .. ") | " .. TR.rolls .. " lần")
+                            return
+                        else
+                            TR.status = "Đang roll"
+                            if trDoRoll(btn, list) then
+                                TR.rolls = TR.rolls + 1
+                                TR.fails = 0
+                            else
+                                TR.fails = TR.fails + 1
+                                if TR.fails >= 3 then
+                                    trStop("Roll không được (hết token?) | " .. TR.rolls .. " lần")
+                                    return
+                                end
+                            end
+                            task.wait(0.3 + math.random() * 0.3)
+                        end
+                    end
+                end
+            end
+        end
+
+        TR.dropdown = TabTool:AddDropdown({
+            Name = "Trait Muốn Có",
+            Options = {},
+            Default = {},
+            MultiSelect = true,
+            Callback = function(Selected)
+                if type(Selected) ~= "table" then
+                    return
+                end
+                TR.selRef = Selected
+                local changed = false
+                for lb, id in pairs(TR.byLabel) do
+                    local v = Selected[lb] == true
+                    if (TR.saved[id] == true) ~= v then
+                        TR.saved[id] = v or nil
+                        changed = true
+                    end
+                end
+                if changed then
+                    trSave()
+                end
+            end
+        })
+
+        TabTool:AddTextBox({
+            Name = "Số Lần Roll Tối Đa",
+            Default = "",
+            PlaceholderText = "0 = All In",
+            ClearText = false,
+            Callback = function(Value)
+                TR.maxRolls = tonumber(tostring(Value or ""):match("%d+")) or 0
+            end
+        })
+
+        TR.toggle = TabTool:AddToggle({
+            Name = "Auto Roll Trait",
+            Default = false,
+            Callback = function(Value)
+                if Value then
+                    if TR.on then
+                        return
+                    end
+                    TR.on = true
+                    TR.run = TR.run + 1
+                    TR.status = "Bắt đầu"
+                    local id = TR.run
+                    task.spawn(function()
+                        local ok, err = pcall(trLoop, id)
+                        if not ok and TR.run == id then
+                            trStop("Lỗi: " .. tostring(err):sub(1, 80))
+                        end
+                    end)
+                else
+                    if TR.on then
+                        TR.on = false
+                        TR.run = TR.run + 1
+                        TR.status = "Đã tắt | " .. TR.rolls .. " lần"
+                    end
+                end
+            end
+        })
+
+        local trPara = TabTool:AddParagraph({"Trait Roll", "Off"})
+
+        task.spawn(function()
+            while true do
+                pcall(function()
+                    local list = trReadList()
+                    if #list > 0 then
+                        trSync(list)
+                    end
+                    local opened = isVisible("GameGui.Screen.Middle.InstantTraitRoll.Roll")
+                    local btn, cost = nil, nil
+                    local curText = TR.cur
+                    if opened then
+                        btn, cost = trButton()
+                        local _, f = trCurrent(list)
+                        curText = f
+                    end
+                    local tokens = getTraitTokensAmount()
+                    local lines = {
+                        TR.status,
+                        "Đã roll: " .. TR.rolls .. (TR.maxRolls > 0 and ("/" .. TR.maxRolls) or " (All In)"),
+                        "Trait hiện tại: " .. (curText ~= "" and curText or "?"),
+                        "Trait Token: " .. (tokens and formatAmount(tokens) or "?") .. " | Giá: " .. (cost and tostring(cost) or "?"),
+                        "Bảng roll: " .. (opened and "mở" or "đóng") .. " | Nút cuộn: " .. (btn and tostring(btn.Name) or "không thấy") .. " | Trait list: " .. #list
+                    }
+                    trPara:SetDesc(table.concat(lines, "\n"))
+                end)
+                task.wait(1)
+            end
+        end)
+    end
+    trSetup()
 end
 
 task.spawn(function()
