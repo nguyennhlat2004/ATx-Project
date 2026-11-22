@@ -5632,8 +5632,25 @@ if TabTool then
             setToggleSilent(TR.toggle, false)
         end
 
-        local function trAsk(full)
+        local function trAsk(full, hit, tg)
             local ans = nil
+            local others = {}
+            for _, e in ipairs(tg) do
+                if e.id ~= hit.id and not TR.rejected[e.id] then
+                    others[#others + 1] = e
+                end
+            end
+            table.sort(others, function(a, b)
+                return (a.odds or 999) < (b.odds or 999)
+            end)
+            local names = {}
+            for i = 1, math.min(3, #others) do
+                names[#names + 1] = others[i].name .. (others[i].odds and (" " .. tostring(others[i].odds) .. "%") or "")
+            end
+            if #others > 3 then
+                names[#names + 1] = "+" .. (#others - 3)
+            end
+            local text = "Hiện tại: " .. full .. (hit.odds and (" (" .. tostring(hit.odds) .. "%)") or "") .. "\nTrait khác: " .. (#names > 0 and table.concat(names, ", ") or "không còn") .. "\nChắc chắn giữ trait này, bỏ qua trait khác?"
             pcall(function()
                 local g = game:GetService("CoreGui"):FindFirstChild("redz Library V5")
                 if not g and gethui then
@@ -5646,13 +5663,13 @@ if TabTool then
             local ok, dlg = pcall(function()
                 return Window:Dialog({
                     Title = "Auto Roll Trait",
-                    Text = "Ra: " .. full .. "\nBỏ trait này để roll tiếp lấy trait khác trong list?",
+                    Text = text,
                     Options = {
+                        {"Giữ, bỏ qua", function()
+                            ans = "keep"
+                        end},
                         {"Roll tiếp", function()
                             ans = "roll"
-                        end},
-                        {"Giữ & Dừng", function()
-                            ans = "keep"
                         end}
                     }
                 })
@@ -5697,6 +5714,7 @@ if TabTool then
 
         local function trDoRoll(btn, list)
             local _, before = trCurrent(list)
+            task.wait(0.2)
             pressGuiOnce(btn)
             local t0 = clockNow()
             local deadline = t0 + 6
@@ -5708,17 +5726,25 @@ if TabTool then
                 local yes = trConfirmYes()
                 if yes then
                     busy = true
-                    if clockNow() - lastYes >= 0.6 then
-                        lastYes = clockNow()
-                        pressGuiOnce(yes)
+                    if clockNow() - lastYes >= 0.8 then
+                        task.wait(0.2)
+                        yes = trConfirmYes()
+                        if yes then
+                            lastYes = clockNow()
+                            pressGuiOnce(yes)
+                        end
                     end
                 end
                 local skip = trRevealSkip()
                 if skip then
                     busy = true
-                    if clockNow() - lastSkip >= 0.6 then
-                        lastSkip = clockNow()
-                        pressGuiOnce(skip)
+                    if clockNow() - lastSkip >= 0.8 then
+                        task.wait(0.2)
+                        skip = trRevealSkip()
+                        if skip then
+                            lastSkip = clockNow()
+                            pressGuiOnce(skip)
+                        end
                     end
                 end
                 if busy then
@@ -5762,7 +5788,7 @@ if TabTool then
                             return
                         end
                         TR.status = "Ra " .. full .. " | chờ chọn"
-                        if trAsk(full) ~= "roll" or not TR.on or TR.run ~= id then
+                        if trAsk(full, hit, tg) ~= "roll" or not TR.on or TR.run ~= id then
                             trStop("Giữ " .. full .. " | " .. TR.rolls .. " lần")
                             return
                         end
@@ -5791,7 +5817,7 @@ if TabTool then
                                     return
                                 end
                             end
-                            task.wait(0.3 + math.random() * 0.3)
+                            task.wait(0.4 + math.random() * 0.3)
                         end
                     end
                 end
