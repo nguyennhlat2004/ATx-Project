@@ -2809,156 +2809,6 @@ local function loadRadioactiveRampageProfile(level)
     return data, url
 end
 
-local EE_NIGHT = {
-    selected = "Level 5",
-    toggle = nil,
-    levels = {
-        ["Level 5"] = {
-            url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/EnchantedEncounter-Level5-Night.lua",
-            fallback = {
-                Name = "Enchanted Encounter Night ( Level 5 )",
-                Difficulty = "dif_impossible",
-                MaxPlace = 20,
-                UfoReserve = 0,
-                DefaultAngle = {-math.pi, 0, -math.pi},
-                DefaultRotation = 180,
-                Night = true,
-                StopAutoSkipAtWave = 33,
-                Price = {
-                    unit_trithorn = 333,
-                    unit_mint_bloom = 3200,
-                    unit_stringshade = 2777,
-                    unit_black_hole = 4500,
-                    unit_bronze_lucky_chomp = 4500,
-                },
-                Events = {
-                    {
-                        Type = "StartPlace",
-                        Name = "Place1_Trithorn",
-                        HardCap = 1,
-                        MaxCount = 1,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        Units = {
-                            {name = "unit_trithorn", pos = {-340.24, 61.68, -109.75}},
-                        },
-                    },
-                    {
-                        Type = "StartUpgradeAll",
-                        Name = "Upgrade_Main",
-                        RequireMinPlaced = 1,
-                        UntilGameEnd = true,
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 4,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place2_Pushpetal",
-                        HardCap = 3,
-                        MaxCount = 2,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_mint_bloom", pos = {-330.85, 61.68, -128.24}},
-                            {name = "unit_mint_bloom", pos = {-339.21, 61.68, -128.61}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 21,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place3_Stringshade",
-                        HardCap = 6,
-                        MaxCount = 3,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_stringshade", pos = {-325.64, 61.68, -98.60}},
-                            {name = "unit_stringshade", pos = {-326.06, 61.68, -95.98}},
-                            {name = "unit_stringshade", pos = {-326.42, 61.68, -92.73}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 23,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place4_BlackHole",
-                        HardCap = 9,
-                        MaxCount = 3,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_black_hole", pos = {-327.37, 61.68, -102.69}},
-                            {name = "unit_black_hole", pos = {-328.09, 61.68, -106.16}},
-                            {name = "unit_black_hole", pos = {-340.12, 61.68, -102.71}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 28,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place5_FlytrapRNG",
-                        HardCap = 14,
-                        MaxCount = 5,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_bronze_lucky_chomp", pos = {-328.11, 61.68, -98.47}},
-                            {name = "unit_bronze_lucky_chomp", pos = {-328.56, 61.68, -86.80}},
-                            {name = "unit_bronze_lucky_chomp", pos = {-329.30, 61.68, -81.50}},
-                            {name = "unit_bronze_lucky_chomp", pos = {-341.38, 61.68, -86.28}},
-                            {name = "unit_bronze_lucky_chomp", pos = {-340.49, 61.68, -82.32}},
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-EE_NIGHT.load = function(level)
-    local entry = EE_NIGHT.levels[tostring(level or EE_NIGHT.selected)] or EE_NIGHT.levels["Level 5"]
-    local url = entry.url
-    local data = decodeFarmLua(httpGet(url))
-    if not profileMatches(data, "night") or type(data.Events) ~= "table" then
-        data = deepCopy(entry.fallback)
-        url = "embedded:EnchantedEncounterNight"
-    end
-    if not data then
-        return nil, nil
-    end
-    data.Difficulty = data.Difficulty or "dif_impossible"
-    data.Night = true
-    return data, url
-end
-
 local GG5 = {
     selected = "Level 5",
     toggle = nil,
@@ -3121,218 +2971,9 @@ GG5.load = function(level)
     return data, url
 end
 
-local GG5N = {
-    selected = "Level 5",
-    toggle = nil,
-    levels = {
-        ["Level 5"] = {
-            url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/Garden-Grind-Level5-Night.lua",
-            fallback = {
-                Name = "Garden Grind Night ( Level 5 )",
-                Difficulty = "dif_impossible",
-                MaxPlace = 20,
-                UfoReserve = 0,
-                DefaultAngle = {-math.pi, 0, -math.pi},
-                DefaultRotation = 180,
-                Night = true,
-                AutoSkipOff = {
-                    {FromWave = 28, ToWave = 28},
-                    {FromWave = 36, ToWave = 37},
-                },
-                SkipRules = {
-                    FromWave = 31,
-                    ForceWaves = {31, 32, 34, 35, 38},
-                    ForceJockeyLimit = {
-                        {Wave = 34, Max = 2},
-                    },
-                    MaxTotalHP = 1000000,
-                    FewEnemies = 3,
-                    FewMaxHP = 2000000,
-                    BlockEnemy = "enemy_jockey",
-                    LockWaveOnBlock = true,
-                    MinBursts = 2,
-                    BurstGap = 3,
-                    Settle = 1.5,
-                    SlowZ = -199.818,
-                    TowardZ = -145.56,
-                    SlowX = -892.286,
-                    TowardX = -846.80,
-                },
-                BossSell = {
-                    Wave = 40,
-                    Enemy = "enemy_queen_spider",
-                    Unit = "unit_stringshade",
-                    PassZ = -168.884,
-                    TowardZ = -145.56,
-                },
-                Abilities = {
-                    {
-                        Unit = "unit_venom_plant",
-                        Interval = 1,
-                        SpamFromWave = 39,
-                        Trigger = {
-                            Ref = "unit_trithorn",
-                            RefPos = {-846.80, 61.93, -165.55},
-                            MaxDX = 75,
-                            ZBand = 15,
-                            PassZ = true,
-                            TowardZ = -145.56,
-                            PassX = -900.845,
-                            TowardX = -846.80,
-                            UntilWave = 27,
-                            Window = 2,
-                        },
-                        Jockey = {
-                            Enemy = "enemy_jockey",
-                            Settle = 1.5,
-                            Use = 2,
-                        },
-                        TimedUse = {
-                            {Wave = 36, Delay = 8, Use = 1},
-                        },
-                    },
-                },
-                Price = {
-                    unit_trithorn = 333,
-                    unit_mint_bloom = 3200,
-                    unit_stringshade = 2777,
-                    unit_metal_bloom = 9250,
-                    unit_venom_plant = 4300,
-                },
-                Events = {
-                    {
-                        Type = "StartPlace",
-                        Name = "Place1_Trithorn",
-                        HardCap = 1,
-                        MaxCount = 1,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        Units = {
-                            {name = "unit_trithorn", pos = {-846.80, 61.93, -165.55}},
-                        },
-                    },
-                    {
-                        Type = "StartUpgradeAll",
-                        Name = "Upgrade_Main",
-                        RequireMinPlaced = 1,
-                        UntilGameEnd = true,
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 4,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place2_Pushpetal",
-                        HardCap = 3,
-                        MaxCount = 2,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_mint_bloom", pos = {-847.49, 61.93, -145.44}},
-                            {name = "unit_mint_bloom", pos = {-856.71, 61.93, -145.68}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 21,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place3_Stringshade",
-                        HardCap = 6,
-                        MaxCount = 3,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_stringshade", pos = {-813.11, 61.93, -162.70}},
-                            {name = "unit_stringshade", pos = {-814.27, 61.93, -159.01}},
-                            {name = "unit_stringshade", pos = {-812.35, 61.93, -160.70}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 23,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place4_Venom",
-                        HardCap = 9,
-                        MaxCount = 3,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_venom_plant", pos = {-848.08, 61.93, -159.65}},
-                            {name = "unit_venom_plant", pos = {-853.88, 61.93, -160.81}},
-                            {name = "unit_venom_plant", pos = {-847.82, 61.93, -152.89}},
-                        },
-                    },
-                    {
-                        Type = "WaitWave",
-                        Wave = 27,
-                    },
-                    {
-                        Type = "StartPlace",
-                        Name = "Place5_MetalBloom",
-                        HardCap = 10,
-                        MaxCount = 1,
-                        SoftFail = false,
-                        MaxAttempts = 80,
-                        MaxCashWait = 900,
-                        Shuffle = true,
-                        ReserveSlots = 0,
-                        PauseUpgrade = true,
-                        Units = {
-                            {name = "unit_metal_bloom", pos = {-853.41, 61.93, -154.66}},
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-GG5N.load = function(level)
-    local entry = GG5N.levels[tostring(level or GG5N.selected)] or GG5N.levels["Level 5"]
-    local url = entry.url
-    local data = decodeFarmLua(httpGet(url))
-    local nm = type(data) == "table" and string.lower(tostring(data.Name or "")) or ""
-    if not profileMatches(data, "garden") or type(data.Events) ~= "table" or not nm:find("night", 1, true) then
-        data = deepCopy(entry.fallback)
-        url = "embedded:GardenGrindNight"
-    end
-    if not data then
-        return nil, nil
-    end
-    data.Difficulty = data.Difficulty or "dif_impossible"
-    data.Night = true
-    return data, url
-end
-
 local function loadActiveProfile()
-    if currentFarm == "GardenGrindNight" then
-        return GG5N.load(GG5N.selected)
-    end
     if currentFarm == "GardenGrind5" then
         return GG5.load(GG5.selected)
-    end
-    if currentFarm == "EnchantedEncounterNight" then
-        return EE_NIGHT.load(EE_NIGHT.selected)
     end
     if currentFarm == "RadioactiveRampage" then
         return loadRadioactiveRampageProfile(selectedRadioactiveRampageLevel)
@@ -4928,12 +4569,8 @@ local function startFarmFor(name)
             setToggleSilent(enchantedEncounterToggle, false)
         elseif other == "GardenGrind" then
             setToggleSilent(gardenGrindToggle, false)
-        elseif other == "EnchantedEncounterNight" then
-            setToggleSilent(EE_NIGHT.toggle, false)
         elseif other == "GardenGrind5" then
             setToggleSilent(GG5.toggle, false)
-        elseif other == "GardenGrindNight" then
-            setToggleSilent(GG5N.toggle, false)
         end
     end
     currentFarm = name
@@ -4953,14 +4590,18 @@ end
 
 if TabMain then
     TabMain:AddDropdown({
-        Name = "Enchanted Encounter Night Level",
+        Name = "Enchanted Encounter Level",
         Options = {"Level 5"},
         Default = "Level 5",
-        Flag = "EnchantedEncounterNightLevel",
+        Flag = "EnchantedEncounterLevel",
         Callback = function(Value)
             local v = tostring(Value or "Level 5")
-            EE_NIGHT.selected = EE_NIGHT.levels[v] and v or "Level 5"
-            if currentFarm == "EnchantedEncounterNight" then
+            if ENCHANTED_ENCOUNTER_LEVELS[v] then
+                selectedEnchantedEncounterLevel = v
+            else
+                selectedEnchantedEncounterLevel = "Level 5"
+            end
+            if currentFarm == "EnchantedEncounter" then
                 local data = loadActiveProfile()
                 if data then
                     farmProfile = data
@@ -4969,14 +4610,14 @@ if TabMain then
         end
     })
 
-    EE_NIGHT.toggle = TabMain:AddToggle({
-        Name = "Auto Farm Enchanted Encounter Night",
+    enchantedEncounterToggle = TabMain:AddToggle({
+        Name = "Auto Farm Enchanted Encounter",
         Default = false,
         Callback = function(Value)
             if Value then
-                startFarmFor("EnchantedEncounterNight")
+                startFarmFor("EnchantedEncounter")
             else
-                stopFarmFor("EnchantedEncounterNight")
+                stopFarmFor("EnchantedEncounter")
             end
         end
     })
@@ -5006,35 +4647,6 @@ if TabMain then
                 startFarmFor("GardenGrind5")
             else
                 stopFarmFor("GardenGrind5")
-            end
-        end
-    })
-
-    TabMain:AddDropdown({
-        Name = "Garden Grind Night Level",
-        Options = {"Level 5"},
-        Default = "Level 5",
-        Flag = "GardenGrindNightLevel",
-        Callback = function(Value)
-            local v = tostring(Value or "Level 5")
-            GG5N.selected = GG5N.levels[v] and v or "Level 5"
-            if currentFarm == "GardenGrindNight" then
-                local data = loadActiveProfile()
-                if data then
-                    farmProfile = data
-                end
-            end
-        end
-    })
-
-    GG5N.toggle = TabMain:AddToggle({
-        Name = "Auto Farm Garden Grind Night",
-        Default = false,
-        Callback = function(Value)
-            if Value then
-                startFarmFor("GardenGrindNight")
-            else
-                stopFarmFor("GardenGrindNight")
             end
         end
     })
