@@ -967,7 +967,14 @@ local function getWaveNumber()
     return 0
 end
 
-local entitiesCache = {folder = nil, at = -100, night = false, lastCtx = nil, hooked = false, gui = {}, scanAt = {}, owned = nil, lastPlace = "-", diag = true}
+local entitiesCache = {folder = nil, at = -100, night = false, lastCtx = nil, hooked = false, gui = {}, scanAt = {}, owned = nil, lastPlace = "-", diag = true, fast = false}
+
+local function fastWait(normal, fast)
+    if entitiesCache.fast then
+        return task.wait(fast)
+    end
+    return task.wait(normal)
+end
 
 local function getCurrentContext()
     local best = nil
@@ -1446,7 +1453,7 @@ local function clickGuiButton(btn)
 end
 
 local function waitUntilHidden(path)
-    while autoFarmEnabled and isVisible(path) do task.wait(0.5) end
+    while autoFarmEnabled and isVisible(path) do fastWait(0.5, 0.1) end
 end
 
 local function waitForGameStart(difficulty)
@@ -1455,11 +1462,11 @@ local function waitForGameStart(difficulty)
     local t0 = clockNow()
     while autoFarmEnabled and clockNow() - t0 < 4 and not isVisible("GameGui.Screen.Middle.DifficultyVote") and not isVisible("GameGui.Screen.Middle.GameEnd") and getEnemyHealth().count == 0 do
         farmStatusText = "Waiting Game Start"
-        task.wait(0.25)
+        fastWait(0.25, 0.1)
     end
     while autoFarmEnabled do
         if gameEndShown() then
-            if autoReplayEnabled and clockNow() - lastRestartAt >= 8 then
+            if autoReplayEnabled and clockNow() - lastRestartAt >= (entitiesCache.fast and 3 or 8) then
                 lastRestartAt = clockNow()
                 restartedAt = clockNow()
                 farmStatusText = "Game End | Restart"
@@ -1475,7 +1482,7 @@ local function waitForGameStart(difficulty)
                 entitiesCache.at = -100
                 local hw = clockNow()
                 while autoFarmEnabled and isVisible("GameGui.Screen.Middle.GameEnd") and clockNow() - hw < 8 do
-                    task.wait(0.25)
+                    fastWait(0.25, 0.1)
                 end
                 if not isVisible("GameGui.Screen.Middle.GameEnd") then
                     entitiesCache.rot = 0
@@ -1488,7 +1495,7 @@ local function waitForGameStart(difficulty)
                 local tries = 0
                 while autoFarmEnabled and isVisible("GameGui.Screen.Middle.DifficultyVote") do
                     if clockNow() >= nextVote then
-                        nextVote = clockNow() + 3
+                        nextVote = clockNow() + (entitiesCache.fast and 1 or 3)
                         tries = tries + 1
                         farmStatusText = "Vote Difficulty"
                         pcall(function()
@@ -1501,7 +1508,7 @@ local function waitForGameStart(difficulty)
                             end
                         end)
                     end
-                    task.wait(0.25)
+                    fastWait(0.25, 0.1)
                 end
                 restartedAt = nil
             else
@@ -1515,7 +1522,7 @@ local function waitForGameStart(difficulty)
         else
             break
         end
-        task.wait(0.5)
+        fastWait(0.5, 0.1)
     end
 end
 
@@ -2940,6 +2947,138 @@ local EE5 = {
                 },
             },
         },
+        ["Level 5 #2"] = {
+            url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/EnchantedEncounter-Level5-2.lua",
+            fallback = {
+                Name = "Enchanted Encounter ( Level 5 #2 )",
+                Difficulty = "dif_impossible",
+                MaxPlace = 20,
+                UfoReserve = 0,
+                DefaultAngle = {-math.pi, 0, -math.pi},
+                DefaultRotation = 180,
+                Night = true,
+                Fast = true,
+                Abilities = {
+                    {
+                        Unit = "unit_venom_plant",
+                        Interval = 1,
+                        SpamFromWave = 1,
+                    },
+                },
+                Price = {
+                    unit_trithorn = 333,
+                    unit_mint_bloom = 3200,
+                    unit_bronze_lucky_chomp = 4500,
+                    unit_venom_plant = 4300,
+                    unit_metal_bloom = 9250,
+                },
+                Events = {
+                    {
+                        Type = "StartPlace",
+                        Name = "Place1_Trithorn",
+                        HardCap = 1,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        Units = {
+                            {name = "unit_trithorn", pos = {-339.77, 61.68, -113.22}},
+                        },
+                    },
+                    {
+                        Type = "StartUpgradeAll",
+                        Name = "Upgrade_Main",
+                        RequireMinPlaced = 1,
+                        UntilGameEnd = true,
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 5,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place2_Pushpetal",
+                        HardCap = 3,
+                        MaxCount = 2,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_mint_bloom", pos = {-332.30, 61.68, -126.63}},
+                            {name = "unit_mint_bloom", pos = {-339.09, 61.68, -127.07}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 24,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place3_FlytrapRNG",
+                        HardCap = 8,
+                        MaxCount = 5,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_bronze_lucky_chomp", pos = {-328.77, 61.68, -99.80}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-340.07, 61.68, -100.75}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-329.46, 61.68, -106.12}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-340.32, 61.68, -107.33}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-329.64, 61.68, -112.58}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 30,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place4_Skeleton",
+                        HardCap = 11,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_venom_plant", pos = {-340.64, 61.68, -87.00}},
+                            {name = "unit_venom_plant", pos = {-330.71, 61.68, -92.68}},
+                            {name = "unit_venom_plant", pos = {-340.59, 61.68, -92.72}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 33,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place5_MetalBloom",
+                        HardCap = 12,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_metal_bloom", pos = {-330.23, 61.68, -87.16}},
+                        },
+                    },
+                },
+            },
+        },
     },
 }
 
@@ -2947,7 +3086,7 @@ EE5.load = function(level)
     local entry = EE5.levels[tostring(level or EE5.selected)] or EE5.levels["Level 5"]
     local url = entry.url
     local data = decodeFarmLua(httpGet(url))
-    if not profileMatches(data, "night") or type(data.Events) ~= "table" then
+    if not profileMatches(data, "enchanted") or type(data.Events) ~= "table" then
         data = deepCopy(entry.fallback)
         url = "embedded:EnchantedEncounter"
     end
@@ -3199,6 +3338,10 @@ local function jitterPos(pos, minMag, maxMag)
 end
 
 local function jitterWait(base)
+    if entitiesCache.fast then
+        task.wait(0.03)
+        return
+    end
     task.wait(base + (math.random() * 0.35))
 end
 
@@ -3400,7 +3543,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
         }
     }
 
-    task.wait(0.1 + math.random() * 0.35)
+    fastWait(0.1 + math.random() * 0.35, 0.03)
     local beforeNear = getUnitModelsNear(unit.name, placePos, PLACE_VERIFY_RADIUS)
     local beforeTotal = getUnitCountByName(unit.name)
     local folders = allEntityFolders()
@@ -3542,10 +3685,11 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
                         return placed
                     end
                     if softFail and cashWait >= maxCashWait then break end
-                    task.wait(0.5)
-                    cashWait = cashWait + 0.5
+                    local dt = entitiesCache.fast and 0.1 or 0.5
+                    task.wait(dt)
+                    cashWait = cashWait + dt
                     if entitiesCache.plCur then
-                        entitiesCache.plCur.c = entitiesCache.plCur.c + 0.5
+                        entitiesCache.plCur.c = entitiesCache.plCur.c + dt
                     end
                     if not softFail and cashWait > maxCashWait then break end
                 end
@@ -3554,7 +3698,7 @@ local function placeUnitList(list, inGameRef, maxCount, placedCounter, isPlacing
                 if getCashAmount() < needCash then
                     if softFail then break end
                     attempts = attempts + 1
-                    task.wait(0.5)
+                    fastWait(0.5, 0.1)
                 else
                     local beforeCash = getCashAmount()
                     attempts = attempts + 1
@@ -3624,6 +3768,7 @@ local function runFarmProfile(profile)
     local difficulty = profile.Difficulty or "dif_normal"
 
     entitiesCache.night = profile.Night == true
+    entitiesCache.fast = profile.Fast == true
     entitiesCache.skipWhy = nil
     entitiesCache.jockeyInfo = nil
     entitiesCache.cardInfo = nil
@@ -3901,7 +4046,7 @@ local function runFarmProfile(profile)
                     end
                 end
             end
-            task.wait(0.25)
+            fastWait(0.25, 0.1)
         end
     end)
 
@@ -3909,9 +4054,9 @@ local function runFarmProfile(profile)
         while autoFarmEnabled and inGame do
             if canUpgrade() then
                 smartUpgradeAll()
-                task.wait(0.1 + (math.random() * 0.2))
+                fastWait(0.1 + (math.random() * 0.2), 0.05)
             else
-                task.wait(0.15)
+                fastWait(0.15, 0.05)
             end
         end
     end)
@@ -3940,8 +4085,9 @@ local function runFarmProfile(profile)
                 inGame = false
                 break
             end
-            task.wait(0.35)
-            t = t + 0.35
+            local dt = entitiesCache.fast and 0.1 or 0.35
+            task.wait(dt)
+            t = t + dt
             if t > 1800 then break end
         end
     end
@@ -3990,7 +4136,7 @@ local function runFarmProfile(profile)
         table.insert(entitiesCache.plog, entitiesCache.plCur)
 
         local okPlace, got = pcall(function()
-            task.wait(0.2)
+            fastWait(0.2, 0.03)
             return placeUnitList(units, stillInGame, maxCount, placedCounter, isPlacing, {
                 maxAttempts = tonumber(ev.MaxAttempts) or 12,
                 softFail = ev.SoftFail == true,
@@ -4522,7 +4668,7 @@ local function startAutoFarm()
             end
             if farmProfile then
                 local okRun = pcall(runFarmProfile, farmProfile)
-                task.wait(okRun and 1 or 2)
+                task.wait(okRun and (entitiesCache.fast and 0.1 or 1) or 2)
             else
                 task.wait(2)
             end
@@ -4740,7 +4886,7 @@ end
 if TabMain then
     TabMain:AddDropdown({
         Name = "Enchanted Encounter Level",
-        Options = {"Level 5"},
+        Options = {"Level 5", "Level 5 #2"},
         Default = "Level 5",
         Flag = "EnchantedEncounterLevel",
         Callback = function(Value)
