@@ -969,9 +969,10 @@ end
 
 local entitiesCache = {folder = nil, at = -100, night = false, lastCtx = nil, hooked = false, gui = {}, scanAt = {}, owned = nil, lastPlace = "-", diag = true, fast = false}
 
-local function fastWait(normal, fast)
+local function fastWait(normal, fmin, fmax)
     if entitiesCache.fast then
-        return task.wait(fast)
+        local hi = tonumber(fmax) or fmin
+        return task.wait(fmin + math.random() * (hi - fmin))
     end
     return task.wait(normal)
 end
@@ -1466,7 +1467,7 @@ local function waitForGameStart(difficulty)
     end
     while autoFarmEnabled do
         if gameEndShown() then
-            if autoReplayEnabled and clockNow() - lastRestartAt >= (entitiesCache.fast and 3 or 8) then
+            if autoReplayEnabled and clockNow() - lastRestartAt >= (entitiesCache.fast and (3 + math.random() * 2) or 8) then
                 lastRestartAt = clockNow()
                 restartedAt = clockNow()
                 farmStatusText = "Game End | Restart"
@@ -1495,7 +1496,7 @@ local function waitForGameStart(difficulty)
                 local tries = 0
                 while autoFarmEnabled and isVisible("GameGui.Screen.Middle.DifficultyVote") do
                     if clockNow() >= nextVote then
-                        nextVote = clockNow() + (entitiesCache.fast and 1 or 3)
+                        nextVote = clockNow() + (entitiesCache.fast and (1.2 + math.random() * 0.8) or 3)
                         tries = tries + 1
                         farmStatusText = "Vote Difficulty"
                         pcall(function()
@@ -1846,6 +1847,11 @@ local function currentFarmStatus()
         info = string.format("ctx=%d own=%s u=%d e=%d lp=%s c=%d", nctx, entitiesCache.owned and "Y" or "N", units, enemies, tostring(entitiesCache.lastPlace):sub(1, 16), math.floor(getCashAmount()))
         if entitiesCache.skipWhy then
             info = info .. " sk=" .. tostring(entitiesCache.skipWhy)
+        end
+        if entitiesCache.nerf then
+            info = info .. " NERF=" .. tostring(entitiesCache.nerf):sub(1, 12)
+        elseif entitiesCache.fast then
+            info = info .. " fast"
         end
         if entitiesCache.jockeyInfo then
             info = info .. " jk=" .. tostring(entitiesCache.jockeyInfo)
@@ -3339,7 +3345,7 @@ end
 
 local function jitterWait(base)
     if entitiesCache.fast then
-        task.wait(0.03)
+        task.wait(0.15 + math.random() * 0.2)
         return
     end
     task.wait(base + (math.random() * 0.35))
@@ -3543,7 +3549,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
         }
     }
 
-    fastWait(0.1 + math.random() * 0.35, 0.03)
+    fastWait(0.1 + math.random() * 0.35, 0.08, 0.22)
     local beforeNear = getUnitModelsNear(unit.name, placePos, PLACE_VERIFY_RADIUS)
     local beforeTotal = getUnitCountByName(unit.name)
     local folders = allEntityFolders()
@@ -3768,7 +3774,7 @@ local function runFarmProfile(profile)
     local difficulty = profile.Difficulty or "dif_normal"
 
     entitiesCache.night = profile.Night == true
-    entitiesCache.fast = profile.Fast == true
+    entitiesCache.fast = profile.Fast == true and not entitiesCache.nerf
     entitiesCache.skipWhy = nil
     entitiesCache.jockeyInfo = nil
     entitiesCache.cardInfo = nil
@@ -4046,7 +4052,7 @@ local function runFarmProfile(profile)
                     end
                 end
             end
-            fastWait(0.25, 0.1)
+            task.wait(0.25)
         end
     end)
 
@@ -4054,12 +4060,34 @@ local function runFarmProfile(profile)
         while autoFarmEnabled and inGame do
             if canUpgrade() then
                 smartUpgradeAll()
-                fastWait(0.1 + (math.random() * 0.2), 0.05)
+                task.wait(0.1 + (math.random() * 0.2))
             else
-                fastWait(0.15, 0.05)
+                task.wait(0.15)
             end
         end
     end)
+
+    if profile.Fast == true then
+        task.spawn(function()
+            while autoFarmEnabled and inGame and entitiesCache.fast do
+                pcall(function()
+                    for _, b in ipairs((uiExtras.boosts())) do
+                        local t = string.lower(tostring(b.t or ""))
+                        local m = tonumber(t:match("x%s*([%d%.]+)"))
+                        if not m then
+                            local pct = tonumber(t:match("^%s*([%d%.]+)%s*%%%s*$"))
+                            m = pct and pct / 100 or nil
+                        end
+                        if m and m < 0.1 then
+                            entitiesCache.fast = false
+                            entitiesCache.nerf = tostring(b.t)
+                        end
+                    end
+                end)
+                task.wait(3)
+            end
+        end)
+    end
 
     task.spawn(function()
         while autoFarmEnabled and inGame do
@@ -4136,7 +4164,7 @@ local function runFarmProfile(profile)
         table.insert(entitiesCache.plog, entitiesCache.plCur)
 
         local okPlace, got = pcall(function()
-            fastWait(0.2, 0.03)
+            fastWait(0.2, 0.15, 0.45)
             return placeUnitList(units, stillInGame, maxCount, placedCounter, isPlacing, {
                 maxAttempts = tonumber(ev.MaxAttempts) or 12,
                 softFail = ev.SoftFail == true,
