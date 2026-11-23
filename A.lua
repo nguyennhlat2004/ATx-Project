@@ -2809,6 +2809,156 @@ local function loadRadioactiveRampageProfile(level)
     return data, url
 end
 
+local EE5 = {
+    selected = "Level 5",
+    toggle = nil,
+    levels = {
+        ["Level 5"] = {
+            url = "https://raw.githubusercontent.com/nguyennhlat2004/NexusYeuEm/refs/heads/main/EnchantedEncounter-Level5-Night.lua",
+            fallback = {
+                Name = "Enchanted Encounter Night ( Level 5 )",
+                Difficulty = "dif_impossible",
+                MaxPlace = 20,
+                UfoReserve = 0,
+                DefaultAngle = {-math.pi, 0, -math.pi},
+                DefaultRotation = 180,
+                Night = true,
+                StopAutoSkipAtWave = 33,
+                Price = {
+                    unit_trithorn = 333,
+                    unit_mint_bloom = 3200,
+                    unit_stringshade = 2777,
+                    unit_black_hole = 4500,
+                    unit_bronze_lucky_chomp = 4500,
+                },
+                Events = {
+                    {
+                        Type = "StartPlace",
+                        Name = "Place1_Trithorn",
+                        HardCap = 1,
+                        MaxCount = 1,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        Units = {
+                            {name = "unit_trithorn", pos = {-340.24, 61.68, -109.75}},
+                        },
+                    },
+                    {
+                        Type = "StartUpgradeAll",
+                        Name = "Upgrade_Main",
+                        RequireMinPlaced = 1,
+                        UntilGameEnd = true,
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 4,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place2_Pushpetal",
+                        HardCap = 3,
+                        MaxCount = 2,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_mint_bloom", pos = {-330.85, 61.68, -128.24}},
+                            {name = "unit_mint_bloom", pos = {-339.21, 61.68, -128.61}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 21,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place3_Stringshade",
+                        HardCap = 6,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_stringshade", pos = {-325.64, 61.68, -98.60}},
+                            {name = "unit_stringshade", pos = {-326.06, 61.68, -95.98}},
+                            {name = "unit_stringshade", pos = {-326.42, 61.68, -92.73}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 23,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place4_BlackHole",
+                        HardCap = 9,
+                        MaxCount = 3,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_black_hole", pos = {-327.37, 61.68, -102.69}},
+                            {name = "unit_black_hole", pos = {-328.09, 61.68, -106.16}},
+                            {name = "unit_black_hole", pos = {-340.12, 61.68, -102.71}},
+                        },
+                    },
+                    {
+                        Type = "WaitWave",
+                        Wave = 28,
+                    },
+                    {
+                        Type = "StartPlace",
+                        Name = "Place5_FlytrapRNG",
+                        HardCap = 14,
+                        MaxCount = 5,
+                        SoftFail = false,
+                        MaxAttempts = 80,
+                        MaxCashWait = 900,
+                        Shuffle = true,
+                        ReserveSlots = 0,
+                        PauseUpgrade = true,
+                        Units = {
+                            {name = "unit_bronze_lucky_chomp", pos = {-328.11, 61.68, -98.47}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-328.56, 61.68, -86.80}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-329.30, 61.68, -81.50}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-341.38, 61.68, -86.28}},
+                            {name = "unit_bronze_lucky_chomp", pos = {-340.49, 61.68, -82.32}},
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+EE5.load = function(level)
+    local entry = EE5.levels[tostring(level or EE5.selected)] or EE5.levels["Level 5"]
+    local url = entry.url
+    local data = decodeFarmLua(httpGet(url))
+    if not profileMatches(data, "night") or type(data.Events) ~= "table" then
+        data = deepCopy(entry.fallback)
+        url = "embedded:EnchantedEncounter"
+    end
+    if not data then
+        return nil, nil
+    end
+    data.Difficulty = data.Difficulty or "dif_impossible"
+    data.Night = true
+    return data, url
+end
+
 local GG5 = {
     selected = "Level 5",
     toggle = nil,
@@ -2982,7 +3132,7 @@ local function loadActiveProfile()
         return loadGardenGrindProfile(GARDEN_GRIND.selected)
     end
     if currentFarm == "EnchantedEncounter" then
-        return loadEnchantedEncounterProfile(selectedEnchantedEncounterLevel)
+        return EE5.load(EE5.selected)
     end
     return nil, nil
 end
@@ -4548,7 +4698,6 @@ end
 local TabSetting = Window:MakeTab({"Setting", "settings"})
 
 local radioactiveRampageToggle = nil
-local enchantedEncounterToggle = nil
 local gardenGrindToggle = nil
 
 local function setToggleSilent(toggle, value)
@@ -4566,7 +4715,7 @@ local function startFarmFor(name)
         if other == "RadioactiveRampage" then
             setToggleSilent(radioactiveRampageToggle, false)
         elseif other == "EnchantedEncounter" then
-            setToggleSilent(enchantedEncounterToggle, false)
+            setToggleSilent(EE5.toggle, false)
         elseif other == "GardenGrind" then
             setToggleSilent(gardenGrindToggle, false)
         elseif other == "GardenGrind5" then
@@ -4596,11 +4745,7 @@ if TabMain then
         Flag = "EnchantedEncounterLevel",
         Callback = function(Value)
             local v = tostring(Value or "Level 5")
-            if ENCHANTED_ENCOUNTER_LEVELS[v] then
-                selectedEnchantedEncounterLevel = v
-            else
-                selectedEnchantedEncounterLevel = "Level 5"
-            end
+            EE5.selected = EE5.levels[v] and v or "Level 5"
             if currentFarm == "EnchantedEncounter" then
                 local data = loadActiveProfile()
                 if data then
@@ -4610,7 +4755,7 @@ if TabMain then
         end
     })
 
-    enchantedEncounterToggle = TabMain:AddToggle({
+    EE5.toggle = TabMain:AddToggle({
         Name = "Auto Farm Enchanted Encounter",
         Default = false,
         Callback = function(Value)
