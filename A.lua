@@ -1437,6 +1437,7 @@ local function clickGuiButton(btn)
         return true
     end
     pcall(function()
+        entitiesCache.vimAt = clockNow()
         local vim = game:GetService("VirtualInputManager")
         local pos = target.AbsolutePosition + (target.AbsoluteSize / 2)
         local x, y = pos.X, pos.Y
@@ -1579,6 +1580,7 @@ local function pressGuiOnce(obj)
         end
     end
     return pcall(function()
+        entitiesCache.vimAt = clockNow()
         local vim = game:GetService("VirtualInputManager")
         local pos = target.AbsolutePosition + (target.AbsoluteSize / 2)
         local x, y = pos.X, pos.Y
@@ -1847,6 +1849,9 @@ local function currentFarmStatus()
         info = string.format("ctx=%d own=%s u=%d e=%d lp=%s c=%d", nctx, entitiesCache.owned and "Y" or "N", units, enemies, tostring(entitiesCache.lastPlace):sub(1, 16), math.floor(getCashAmount()))
         if entitiesCache.skipWhy then
             info = info .. " sk=" .. tostring(entitiesCache.skipWhy)
+        end
+        if entitiesCache.setupInfo then
+            info = info .. " st=" .. tostring(entitiesCache.setupInfo):sub(1, 60)
         end
         if entitiesCache.nerf then
             info = info .. " NERF=" .. tostring(entitiesCache.nerf):sub(1, 12)
@@ -3569,6 +3574,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
     local okInvoke, placeRet = pcall(function()
         return placeUnit:InvokeServer(unpack(args))
     end)
+    entitiesCache.placedAt = clockNow()
     if okInvoke then
         rememberPlacedId(unit.name, placeRet)
     end
@@ -5012,29 +5018,49 @@ if not isLobby then
         end
     })
 
-    task.spawn(function()
-        while true do
-            if autoHideUnitViewer and isVisible("GameGui.Screen.Bottom.UnitViewer") then
+    local function uvSetup()
+        local uv = {open = false, at = 0, byScript = false}
+        local path = "GameGui.Screen.Bottom.UnitViewer"
+        local function uvHide()
+            local tries = 0
+            while autoHideUnitViewer and isVisible(path) and tries < 8 do
+                local closeBtn = nil
+                pcall(function()
+                    closeBtn = player.PlayerGui.GameGui.Screen.Bottom.UnitViewer.Close
+                end)
+                clickGuiButton(closeBtn)
+                tries = tries + 1
                 task.wait(0.3)
-                local tries = 0
-                while autoHideUnitViewer and isVisible("GameGui.Screen.Bottom.UnitViewer") and tries < 8 do
-                    local closeBtn = nil
-                    pcall(function()
-                        closeBtn = player.PlayerGui.GameGui.Screen.Bottom.UnitViewer.Close
-                    end)
-                    clickGuiButton(closeBtn)
-                    tries = tries + 1
-                    task.wait(0.3)
-                end
-                if autoHideUnitViewer and isVisible("GameGui.Screen.Bottom.UnitViewer") then
-                    pcall(function()
-                        player.PlayerGui.GameGui.Screen.Bottom.UnitViewer.Visible = false
-                    end)
-                end
             end
-            task.wait(0.3)
+            if autoHideUnitViewer and isVisible(path) then
+                pcall(function()
+                    player.PlayerGui.GameGui.Screen.Bottom.UnitViewer.Visible = false
+                end)
+            end
         end
-    end)
+        task.spawn(function()
+            while true do
+                if autoHideUnitViewer and isVisible(path) then
+                    local now = clockNow()
+                    local pAt = entitiesCache.placedAt or -1000
+                    if not uv.open then
+                        uv.open = true
+                        uv.at = now
+                        uv.byScript = now - pAt <= 5
+                    elseif pAt > uv.at and now - pAt <= 5 then
+                        uv.byScript = true
+                    end
+                    if uv.byScript or now - uv.at >= 20 then
+                        uvHide()
+                    end
+                else
+                    uv.open = false
+                end
+                task.wait(0.2)
+            end
+        end)
+    end
+    uvSetup()
 
     TabSetting:AddToggle({
         Name = "Auto Replay",
@@ -5046,26 +5072,166 @@ if not isLobby then
     })
 
     local function gfxSetup()
-        local gfx = {on = true, level = 3, mute = true, last = -1000, busy = false}
+        local gfx = {on = true, level = 3, levelName = "Normal", mute = true, last = -1000, busy = false, setup = false, idle = false, input = clockNow(), muted = false, master = nil, vol = {}, saved = nil, ui = {}, file = "NexusStella_Restore.json"}
         local gfxLevels = {Auto = 1, Low = 2, Normal = 3, High = 4}
+        local HS = game:GetService("HttpService")
 
-        local function gfxRead()
+        local function gfxRead(name)
+            name = name or "st_graphics"
             local v = nil
             pcall(function()
-                v = player:GetAttribute("st_graphics")
+                v = player:GetAttribute(name)
             end)
             if v == nil then
                 pcall(function()
-                    local o = player:FindFirstChild("st_graphics", true)
+                    local o = player:FindFirstChild(name, true)
                     if o and o:IsA("ValueBase") then
                         v = o.Value
                     end
                 end)
             end
+            if type(v) == "boolean" then
+                return v
+            end
             return tonumber(v)
         end
 
-        TabSetting:AddToggle({
+        local function gfxSend(name, v)
+            pcall(function()
+                local r = getRemote("ChangeSetting")
+                if r then
+                    r:InvokeServer(name, v)
+                end
+            end)
+        end
+
+        local function gfxSave()
+            pcall(function()
+                if not writefile then
+                    return
+                end
+                local d = {}
+                local any = false
+                if gfx.muted then
+                    d.master = gfx.master
+                    d.vol = {}
+                    for n, st in pairs(gfx.vol) do
+                        if st.orig ~= nil then
+                            d.vol[n] = st.orig
+                        end
+                    end
+                    any = true
+                end
+                if gfx.idle and gfx.saved then
+                    d.levelName = gfx.saved.levelName
+                    d.on = gfx.saved.on
+                    d.idle = true
+                    any = true
+                end
+                if any then
+                    writefile(gfx.file, HS:JSONEncode(d))
+                elseif isfile and isfile(gfx.file) then
+                    if delfile then
+                        delfile(gfx.file)
+                    else
+                        writefile(gfx.file, "{}")
+                    end
+                end
+            end)
+        end
+
+        local function volNames()
+            local list, seen = {}, {}
+            pcall(function()
+                local sf = player.PlayerGui.GameGui.Screen.Middle.Settings.Items.Items.ScrollingFrame
+                for _, c in ipairs(sf:GetChildren()) do
+                    local n = string.lower(tostring(c.Name))
+                    if n:sub(1, 3) == "st_" and not seen[c.Name] and (n:find("volume", 1, true) or n:find("music", 1, true) or n:find("sound", 1, true) or n:find("sfx", 1, true)) then
+                        seen[c.Name] = true
+                        list[#list + 1] = c.Name
+                    end
+                end
+            end)
+            if not seen.st_fx_volume then
+                list[#list + 1] = "st_fx_volume"
+            end
+            return list
+        end
+
+        local function muteOn()
+            local now = clockNow()
+            local first = not gfx.muted
+            pcall(function()
+                local gs = UserSettings():GetService("UserGameSettings")
+                if first then
+                    gfx.master = gs.MasterVolume
+                end
+                if gs.MasterVolume > 0 then
+                    gs.MasterVolume = 0
+                end
+            end)
+            if first then
+                gfx.muted = true
+                gfx.vol = {}
+                for _, n in ipairs(volNames()) do
+                    gfx.vol[n] = {orig = gfxRead(n), last = -1000, busy = false}
+                end
+                gfxSave()
+            end
+            for n, st in pairs(gfx.vol) do
+                if st.orig ~= nil and not st.busy then
+                    local cur = gfxRead(n)
+                    local target = 0
+                    if type(st.orig) == "boolean" then
+                        target = false
+                    end
+                    if cur ~= target and now - st.last >= 2 then
+                        st.last = now
+                        st.busy = true
+                        task.spawn(function()
+                            gfxSend(n, target)
+                            st.busy = false
+                        end)
+                    end
+                end
+            end
+        end
+
+        local function muteOff()
+            if not gfx.muted then
+                return
+            end
+            gfx.muted = false
+            pcall(function()
+                local gs = UserSettings():GetService("UserGameSettings")
+                if gfx.master and gfx.master > 0 then
+                    gs.MasterVolume = gfx.master
+                end
+            end)
+            gfx.master = nil
+            for n, st in pairs(gfx.vol) do
+                if st.orig ~= nil then
+                    local o = st.orig
+                    task.spawn(function()
+                        gfxSend(n, o)
+                    end)
+                end
+            end
+            gfx.vol = {}
+            gfxSave()
+        end
+
+        gfx.ui.setup = TabSetting:AddToggle({
+            Name = "Auto Setup",
+            Default = false,
+            Flag = "AutoSetup",
+            Callback = function(Value)
+                gfx.setup = Value == true
+                gfx.input = clockNow()
+            end
+        })
+
+        gfx.ui.gfx = TabSetting:AddToggle({
             Name = "Auto Set Graphic",
             Default = true,
             Flag = "AutoSetGraphic",
@@ -5075,32 +5241,157 @@ if not isLobby then
             end
         })
 
-        TabSetting:AddDropdown({
+        gfx.ui.drop = TabSetting:AddDropdown({
             Name = "Graphic Quality",
             Options = {"Auto", "Low", "Normal", "High"},
             Default = "Normal",
             Flag = "GraphicQuality",
             Callback = function(Value)
-                gfx.level = gfxLevels[tostring(Value)] or 3
+                local name = tostring(Value)
+                gfx.level = gfxLevels[name] or 3
+                if not gfx.idle and gfxLevels[name] then
+                    gfx.levelName = name
+                end
                 gfx.last = -1000
             end
         })
 
-        TabSetting:AddToggle({
+        gfx.ui.mute = TabSetting:AddToggle({
             Name = "Auto Mute",
             Default = true,
             Flag = "AutoMute",
             Callback = function(Value)
                 gfx.mute = Value == true
+                if not gfx.mute then
+                    muteOff()
+                end
             end
         })
 
+        local function uiSet(key, v)
+            pcall(function()
+                if key == "drop" then
+                    gfx.ui.drop:Select(v)
+                else
+                    gfx.ui[key]:Set(v)
+                end
+            end)
+        end
+
+        local function enterIdle()
+            gfx.saved = {levelName = gfx.levelName, on = gfx.on}
+            gfx.idle = true
+            gfx.on = true
+            gfx.level = gfxLevels.Low
+            gfx.mute = true
+            gfx.last = -1000
+            uiSet("gfx", true)
+            uiSet("drop", "Low")
+            uiSet("mute", true)
+            gfxSave()
+        end
+
+        local function leaveIdle()
+            local sv = gfx.saved or {levelName = gfx.levelName, on = gfx.on}
+            gfx.idle = false
+            gfx.saved = nil
+            gfx.levelName = gfxLevels[sv.levelName] and sv.levelName or gfx.levelName
+            gfx.level = gfxLevels[gfx.levelName] or 3
+            uiSet("drop", gfx.levelName)
+            local lv = gfx.level
+            task.spawn(function()
+                gfxSend("st_graphics", lv)
+            end)
+            gfx.last = clockNow()
+            if sv.on == false then
+                gfx.on = false
+                uiSet("gfx", false)
+            end
+            gfx.mute = false
+            uiSet("mute", false)
+            muteOff()
+            gfxSave()
+        end
+
+        pcall(function()
+            if not (isfile and readfile and isfile(gfx.file)) then
+                return
+            end
+            local d = HS:JSONDecode(readfile(gfx.file))
+            if type(d) ~= "table" then
+                return
+            end
+            if tonumber(d.master) and d.master > 0 then
+                pcall(function()
+                    local gs = UserSettings():GetService("UserGameSettings")
+                    if gs.MasterVolume <= 0 then
+                        gs.MasterVolume = d.master
+                    end
+                end)
+            end
+            if type(d.vol) == "table" then
+                for n, v in pairs(d.vol) do
+                    task.spawn(function()
+                        gfxSend(n, v)
+                    end)
+                end
+            end
+            if d.idle then
+                if gfxLevels[tostring(d.levelName)] then
+                    gfx.levelName = tostring(d.levelName)
+                    gfx.level = gfxLevels[gfx.levelName]
+                    uiSet("drop", gfx.levelName)
+                    local lv = gfx.level
+                    task.spawn(function()
+                        gfxSend("st_graphics", lv)
+                    end)
+                end
+                if d.on == false then
+                    gfx.on = false
+                    uiSet("gfx", false)
+                end
+                gfx.mute = false
+                uiSet("mute", false)
+            end
+            gfx.muted = false
+            gfxSave()
+        end)
+
+        pcall(function()
+            local UIS = game:GetService("UserInputService")
+            local function onInput(input)
+                if entitiesCache.vimAt and clockNow() - entitiesCache.vimAt < 0.6 then
+                    return
+                end
+                local okP, pos = pcall(function()
+                    return input.Position
+                end)
+                if okP and pos and math.abs(pos.X) <= 4 and math.abs(pos.Y) <= 4 then
+                    return
+                end
+                gfx.input = clockNow()
+            end
+            UIS.InputBegan:Connect(onInput)
+            UIS.InputChanged:Connect(function(input)
+                local t = input.UserInputType
+                if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.MouseWheel then
+                    onInput(input)
+                end
+            end)
+        end)
+
         task.spawn(function()
             while true do
+                local now = clockNow()
+                local active = autoFarmEnabled and gfx.setup
+                if gfx.idle and (not active or now - gfx.input < 20) then
+                    pcall(leaveIdle)
+                elseif active and not gfx.idle and now - gfx.input >= 20 then
+                    pcall(enterIdle)
+                end
                 if autoFarmEnabled then
                     if gfx.on and not gfx.busy then
                         local cur = gfxRead()
-                        local now = clockNow()
                         local due = false
                         if cur ~= nil then
                             due = cur ~= gfx.level and now - gfx.last >= 2
@@ -5110,26 +5401,34 @@ if not isLobby then
                         if due then
                             gfx.last = now
                             gfx.busy = true
+                            local lv = gfx.level
                             task.spawn(function()
-                                pcall(function()
-                                    local r = getRemote("ChangeSetting")
-                                    if r then
-                                        r:InvokeServer("st_graphics", gfx.level)
-                                    end
-                                end)
+                                gfxSend("st_graphics", lv)
                                 gfx.busy = false
                             end)
                         end
                     end
                     if gfx.mute then
-                        pcall(function()
-                            local gs = UserSettings():GetService("UserGameSettings")
-                            if gs.MasterVolume > 0 then
-                                gs.MasterVolume = 0
-                            end
-                        end)
+                        muteOn()
+                    else
+                        muteOff()
                     end
+                else
+                    muteOff()
                 end
+                pcall(function()
+                    local parts = {}
+                    if gfx.idle then
+                        parts[#parts + 1] = "idle"
+                    end
+                    if gfx.muted then
+                        parts[#parts + 1] = "M" .. tostring(gfx.master)
+                        for n, st in pairs(gfx.vol) do
+                            parts[#parts + 1] = tostring(n):gsub("^st_", ""):sub(1, 10) .. ":" .. tostring(st.orig) .. ">" .. tostring(gfxRead(n))
+                        end
+                    end
+                    entitiesCache.setupInfo = #parts > 0 and table.concat(parts, ",") or nil
+                end)
                 task.wait(0.5)
             end
         end)
