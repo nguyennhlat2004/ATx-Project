@@ -1316,6 +1316,19 @@ local function clockNow()
     return os.time()
 end
 
+uiExtras.notePl = function(short)
+    local now = clockNow()
+    local w = getWaveNumber()
+    entitiesCache.placedOkAt = now
+    if entitiesCache.rbMark then
+        entitiesCache.rbMark("PLACE_OK " .. tostring(short) .. " w" .. tostring(w) .. " c" .. tostring(math.floor(getCashAmount())))
+    end
+    if uiExtras.pl1 == nil then
+        uiExtras.pl1 = {tostring(short), w, now}
+    end
+end
+
+
 local function isVisible(path)
     local shown = false
     local exists = true
@@ -1471,6 +1484,7 @@ local function waitForGameStart(difficulty)
             if autoReplayEnabled and clockNow() - lastRestartAt >= (entitiesCache.fast and (3 + math.random() * 2) or 8) then
                 lastRestartAt = clockNow()
                 restartedAt = clockNow()
+                entitiesCache.sawReset = nil
                 farmStatusText = "Game End | Restart"
                 pcall(function()
                     local cands = contextMode() and contextCandidates() or {}
@@ -1521,6 +1535,14 @@ local function waitForGameStart(difficulty)
             end
         elseif restartedAt and clockNow() - restartedAt < 25 and contextMode() then
             farmStatusText = "Waiting Vote"
+            local wv = getWaveNumber()
+            if wv <= 1 then
+                entitiesCache.sawReset = true
+            elseif entitiesCache.sawReset and wv >= 2 then
+                entitiesCache.sawReset = nil
+                if entitiesCache.rbMark then entitiesCache.rbMark("NOVOTE_START w" .. wv) end
+                break
+            end
         else
             break
         end
@@ -1849,6 +1871,10 @@ local function currentFarmStatus()
         info = string.format("ctx=%d own=%s u=%d e=%d lp=%s c=%d", nctx, entitiesCache.owned and "Y" or "N", units, enemies, tostring(entitiesCache.lastPlace):sub(1, 16), math.floor(getCashAmount()))
         if entitiesCache.skipWhy then
             info = info .. " sk=" .. tostring(entitiesCache.skipWhy)
+        end
+        local p1 = uiExtras.pl1
+        if type(p1) == "table" and uiExtras.startAt then
+            info = info .. string.format(" f1=%s@w%s+%.1fs", tostring(p1[1]):sub(1, 4), tostring(p1[2]), (tonumber(p1[3]) or 0) - (tonumber(uiExtras.startAt) or 0))
         end
         if entitiesCache.setupInfo then
             info = info .. " st=" .. tostring(entitiesCache.setupInfo):sub(1, 60)
@@ -3591,6 +3617,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
         task.wait(0.08)
         if hasNewUnitNear(unit.name, placePos, PLACE_VERIFY_RADIUS, beforeNear) then
             entitiesCache.lastPlace = short .. ":ok"
+            uiExtras.notePl(short)
             if contextMode() then
                 entitiesCache.owned = getEntitiesFolder()
             end
@@ -3598,6 +3625,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
         end
         if getUnitCountByName(unit.name) > beforeTotal then
             entitiesCache.lastPlace = short .. ":ok"
+            uiExtras.notePl(short)
             return true
         end
         for _, f in ipairs(folders) do
@@ -3619,6 +3647,7 @@ local function tryPlaceOne(unit, defaultAngle, defaultRotation, minMag, maxMag, 
                 entitiesCache.folder = f
                 entitiesCache.at = os.clock()
                 entitiesCache.lastPlace = short .. ":ok*"
+                uiExtras.notePl(short)
                 return true
             end
         end
@@ -3789,6 +3818,9 @@ local function runFarmProfile(profile)
     entitiesCache.at = -100
     waitForGameStart(difficulty)
     entitiesCache.at = -100
+    uiExtras.startAt = clockNow()
+    uiExtras.pl1 = nil
+    if entitiesCache.rbMark then entitiesCache.rbMark("GAME_START w" .. getWaveNumber() .. " c" .. math.floor(getCashAmount()) .. " " .. tostring(profile.Name)) end
     if not autoFarmEnabled then return end
 
     local inGame = true
@@ -4084,7 +4116,7 @@ local function runFarmProfile(profile)
                             local pct = tonumber(t:match("^%s*([%d%.]+)%s*%%%s*$"))
                             m = pct and pct / 100 or nil
                         end
-                        if m and m < 0.1 then
+                        if m and m <= 0.5 then
                             entitiesCache.fast = false
                             entitiesCache.nerf = tostring(b.t)
                         end
@@ -5042,21 +5074,18 @@ if not isLobby then
             while true do
                 if autoHideUnitViewer and isVisible(path) then
                     local now = clockNow()
-                    local pAt = entitiesCache.placedAt or -1000
                     if not uv.open then
                         uv.open = true
                         uv.at = now
-                        uv.byScript = now - pAt <= 5
-                    elseif pAt > uv.at and now - pAt <= 5 then
-                        uv.byScript = true
                     end
-                    if uv.byScript or now - uv.at >= 20 then
+                    if now - (entitiesCache.placedOkAt or -1000) <= 2 or now - uv.at >= 15 then
                         uvHide()
+                        uv.open = false
                     end
                 else
                     uv.open = false
                 end
-                task.wait(0.2)
+                task.wait(0.1)
             end
         end)
     end
@@ -5115,9 +5144,11 @@ if not isLobby then
                 if gfx.muted then
                     d.master = gfx.master
                     d.vol = {}
+                    d.volMode = {}
                     for n, st in pairs(gfx.vol) do
                         if st.orig ~= nil then
                             d.vol[n] = st.orig
+                            d.volMode[n] = st.mode
                         end
                     end
                     any = true
@@ -5140,22 +5171,89 @@ if not isLobby then
             end)
         end
 
-        local function volNames()
-            local list, seen = {}, {}
+        local function volItems()
+            local list = {}
             pcall(function()
                 local sf = player.PlayerGui.GameGui.Screen.Middle.Settings.Items.Items.ScrollingFrame
                 for _, c in ipairs(sf:GetChildren()) do
                     local n = string.lower(tostring(c.Name))
-                    if n:sub(1, 3) == "st_" and not seen[c.Name] and (n:find("volume", 1, true) or n:find("music", 1, true) or n:find("sound", 1, true) or n:find("sfx", 1, true)) then
-                        seen[c.Name] = true
-                        list[#list + 1] = c.Name
+                    if n:sub(1, 3) == "st_" and (n:find("volume", 1, true) or n:find("music", 1, true) or n:find("sound", 1, true) or n:find("sfx", 1, true)) then
+                        list[#list + 1] = c
                     end
                 end
             end)
-            if not seen.st_fx_volume then
-                list[#list + 1] = "st_fx_volume"
-            end
             return list
+        end
+
+        local function volItem(name)
+            for _, c in ipairs(volItems()) do
+                if c.Name == name then
+                    return c
+                end
+            end
+            return nil
+        end
+
+        local function volText(item)
+            local best = nil
+            pcall(function()
+                for _, d in ipairs(item:GetDescendants()) do
+                    if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                        local t = tostring(d.Text or "")
+                        local lt = string.lower(t)
+                        if t:match("^%s*[%d%.]+%s*%%?%s*$") or lt:match("^%s*on%s*$") or lt:match("^%s*off%s*$") or t:find("Bật", 1, true) or t:find("Tắt", 1, true) or lt:find("bật", 1, true) or lt:find("tắt", 1, true) then
+                            best = t
+                            return
+                        end
+                    end
+                end
+            end)
+            return best
+        end
+
+        local function volZero(t)
+            if t == nil then
+                return false
+            end
+            local st = tostring(t)
+            local lt = string.lower(st)
+            if lt:find("off", 1, true) or lt:find("tắt", 1, true) or st:find("Tắt", 1, true) then
+                return true
+            end
+            local n = tonumber(st:match("[%d%.]+"))
+            return n ~= nil and n == 0
+        end
+
+        local function volPress(item)
+            local btn = nil
+            pcall(function()
+                btn = item.Items.Items.Button
+            end)
+            if not btn then
+                pcall(function()
+                    btn = item:FindFirstChildWhichIsA("GuiButton", true)
+                end)
+            end
+            if not btn then
+                return false
+            end
+            return clickGuiButton(btn)
+        end
+
+        local function volCycle(name, wantFn)
+            for _ = 1, 12 do
+                local item = volItem(name)
+                if not item then
+                    return false
+                end
+                if wantFn(volText(item)) then
+                    return true
+                end
+                volPress(item)
+                task.wait(0.35)
+            end
+            local item = volItem(name)
+            return item ~= nil and wantFn(volText(item))
         end
 
         local function muteOn()
@@ -5173,28 +5271,79 @@ if not isLobby then
             if first then
                 gfx.muted = true
                 gfx.vol = {}
-                for _, n in ipairs(volNames()) do
-                    gfx.vol[n] = {orig = gfxRead(n), last = -1000, busy = false}
+                local names = {}
+                for _, c in ipairs(volItems()) do
+                    names[#names + 1] = c.Name
+                end
+                local seen = {}
+                for _, n in ipairs(names) do
+                    seen[n] = true
+                end
+                if not seen.st_fx_volume then
+                    names[#names + 1] = "st_fx_volume"
+                end
+                for _, n in ipairs(names) do
+                    local item = volItem(n)
+                    local t = item and volText(item) or nil
+                    if t then
+                        gfx.vol[n] = {mode = "gui", orig = t, last = -1000, busy = false, fail = 0}
+                    else
+                        gfx.vol[n] = {mode = "attr", orig = gfxRead(n), last = -1000, busy = false, fail = 0}
+                    end
                 end
                 gfxSave()
             end
             for n, st in pairs(gfx.vol) do
-                if st.orig ~= nil and not st.busy then
-                    local cur = gfxRead(n)
-                    local target = 0
-                    if type(st.orig) == "boolean" then
-                        target = false
-                    end
-                    if cur ~= target and now - st.last >= 2 then
-                        st.last = now
-                        st.busy = true
-                        task.spawn(function()
-                            gfxSend(n, target)
-                            st.busy = false
-                        end)
+                if st.orig ~= nil and not st.busy and st.fail < 3 then
+                    if st.mode == "gui" then
+                        local item = volItem(n)
+                        if item and not volZero(volText(item)) and now - st.last >= 3 then
+                            st.last = now
+                            st.busy = true
+                            task.spawn(function()
+                                local ok = volCycle(n, volZero)
+                                if not ok then
+                                    st.fail = st.fail + 1
+                                end
+                                st.busy = false
+                            end)
+                        end
+                    else
+                        local cur = gfxRead(n)
+                        local target = 0
+                        if type(st.orig) == "boolean" then
+                            target = false
+                        end
+                        if cur ~= target and now - st.last >= 2 then
+                            st.last = now
+                            st.busy = true
+                            task.spawn(function()
+                                gfxSend(n, target)
+                                st.busy = false
+                            end)
+                        end
                     end
                 end
             end
+        end
+
+        local function volRestore(n, mode, o)
+            task.spawn(function()
+                if mode == "gui" then
+                    for _ = 1, 20 do
+                        local item = volItem(n)
+                        if not item or volText(item) ~= nil then
+                            break
+                        end
+                        task.wait(0.5)
+                    end
+                    volCycle(n, function(t)
+                        return t == o
+                    end)
+                else
+                    gfxSend(n, o)
+                end
+            end)
         end
 
         local function muteOff()
@@ -5209,15 +5358,20 @@ if not isLobby then
                 end
             end)
             gfx.master = nil
-            for n, st in pairs(gfx.vol) do
+            local old = gfx.vol
+            gfx.vol = {}
+            for n, st in pairs(old) do
                 if st.orig ~= nil then
-                    local o = st.orig
+                    local mode, o = st.mode, st.orig
                     task.spawn(function()
-                        gfxSend(n, o)
+                        local t0 = clockNow()
+                        while st.busy and clockNow() - t0 < 6 do
+                            task.wait(0.1)
+                        end
+                        volRestore(n, mode, o)
                     end)
                 end
             end
-            gfx.vol = {}
             gfxSave()
         end
 
@@ -5330,10 +5484,9 @@ if not isLobby then
                 end)
             end
             if type(d.vol) == "table" then
+                local modes = type(d.volMode) == "table" and d.volMode or {}
                 for n, v in pairs(d.vol) do
-                    task.spawn(function()
-                        gfxSend(n, v)
-                    end)
+                    volRestore(n, modes[n] or "attr", v)
                 end
             end
             if d.idle then
@@ -5424,7 +5577,9 @@ if not isLobby then
                     if gfx.muted then
                         parts[#parts + 1] = "M" .. tostring(gfx.master)
                         for n, st in pairs(gfx.vol) do
-                            parts[#parts + 1] = tostring(n):gsub("^st_", ""):sub(1, 10) .. ":" .. tostring(st.orig) .. ">" .. tostring(gfxRead(n))
+                            local item = st.mode == "gui" and volItem(n) or nil
+                            local cur = item and volText(item) or gfxRead(n)
+                            parts[#parts + 1] = tostring(n):gsub("^st_", ""):sub(1, 10) .. ":" .. tostring(st.mode):sub(1, 1) .. tostring(st.orig) .. ">" .. tostring(cur) .. (st.fail > 0 and ("!" .. st.fail) or "")
                         end
                     end
                     entitiesCache.setupInfo = #parts > 0 and table.concat(parts, ",") or nil
@@ -5434,6 +5589,234 @@ if not isLobby then
         end)
     end
     gfxSetup()
+
+    local function rbSetup()
+        local rb = {on = true, buf = {}, size = 0, cap = 4000000, file = nil, full = "", counts = {}, t0 = clockNow(), hooked = false}
+
+        local function ser(v, depth)
+            depth = depth or 0
+            local tv = typeof(v)
+            if tv == "string" then
+                return string.format("%q", v:sub(1, 300))
+            elseif tv == "number" then
+                if v == math.floor(v) then
+                    return tostring(v)
+                end
+                return string.format("%.3f", v)
+            elseif tv == "boolean" or tv == "nil" then
+                return tostring(v)
+            elseif tv == "Vector3" then
+                return string.format("v3(%.2f,%.2f,%.2f)", v.X, v.Y, v.Z)
+            elseif tv == "Vector2" then
+                return string.format("v2(%.1f,%.1f)", v.X, v.Y)
+            elseif tv == "CFrame" then
+                local p = v.Position
+                return string.format("cf(%.2f,%.2f,%.2f)", p.X, p.Y, p.Z)
+            elseif tv == "Instance" then
+                local ok, n = pcall(function()
+                    return v:GetFullName()
+                end)
+                return "I(" .. tostring(ok and n or "?") .. ")"
+            elseif tv == "table" then
+                if depth > 6 then
+                    return "{...}"
+                end
+                local parts = {}
+                local n = 0
+                for k, val in pairs(v) do
+                    n = n + 1
+                    if n > 80 then
+                        parts[#parts + 1] = "..."
+                        break
+                    end
+                    if type(k) == "number" then
+                        parts[#parts + 1] = ser(val, depth + 1)
+                    else
+                        parts[#parts + 1] = tostring(k) .. "=" .. ser(val, depth + 1)
+                    end
+                end
+                return "{" .. table.concat(parts, ",") .. "}"
+            end
+            return tv .. "(" .. tostring(v) .. ")"
+        end
+
+        local function add(line)
+            if not rb.file or rb.size >= rb.cap then
+                return
+            end
+            local l = string.format("[%8.2f w%d] %s\n", clockNow() - rb.t0, getWaveNumber(), line)
+            rb.size = rb.size + #l
+            rb.buf[#rb.buf + 1] = l
+            if rb.size >= rb.cap then
+                rb.buf[#rb.buf + 1] = "=== CAP REACHED ===\n"
+            end
+        end
+
+        local function flush()
+            if #rb.buf == 0 or not rb.file then
+                return
+            end
+            local chunk = table.concat(rb.buf)
+            rb.buf = {}
+            pcall(function()
+                if appendfile then
+                    appendfile(rb.file, chunk)
+                else
+                    rb.full = rb.full .. chunk
+                    writefile(rb.file, rb.full)
+                end
+            end)
+        end
+
+        local function dumpSettings()
+            pcall(function()
+                local attrs = {}
+                for k, v in pairs(player:GetAttributes()) do
+                    if tostring(k):sub(1, 3) == "st_" then
+                        attrs[#attrs + 1] = tostring(k) .. "=" .. tostring(v)
+                    end
+                end
+                add("ATTR " .. table.concat(attrs, " "))
+            end)
+            pcall(function()
+                local sf = player.PlayerGui.GameGui.Screen.Middle.Settings.Items.Items.ScrollingFrame
+                for _, c in ipairs(sf:GetChildren()) do
+                    local texts = {}
+                    for _, d in ipairs(c:GetDescendants()) do
+                        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                            texts[#texts + 1] = d.Name .. "=" .. string.format("%q", tostring(d.Text):sub(1, 40))
+                        elseif d:IsA("ValueBase") then
+                            texts[#texts + 1] = d.Name .. ":" .. tostring(d.Value)
+                        end
+                    end
+                    add("SETTING " .. c.Name .. " [" .. c.ClassName .. "] " .. table.concat(texts, " "))
+                end
+            end)
+        end
+
+        local function record(self, m, isScript, args)
+            if not rb.on or not autoFarmEnabled or not rb.file then
+                return
+            end
+            local okN, name = pcall(function()
+                return self.Name
+            end)
+            name = okN and tostring(name) or "?"
+            rb.counts[name] = (rb.counts[name] or 0) + 1
+            if not isScript and name ~= "RecorderBatch" and rb.counts[name] > 300 then
+                return
+            end
+            local parts = {}
+            for i = 1, args.n or #args do
+                parts[#parts + 1] = ser(args[i], 0)
+            end
+            local body = table.concat(parts, ", ")
+            local lim = name == "RecorderBatch" and 20000 or 1500
+            if #body > lim then
+                body = body:sub(1, lim) .. "..."
+            end
+            add((isScript and "SCRIPT " or "GAME   ") .. m .. " " .. name .. " (" .. body .. ")")
+        end
+
+
+        local function hook()
+            if rb.hooked or not (hookmetamethod and getnamecallmethod) then
+                return
+            end
+            rb.hooked = true
+            local old
+            local wrap = newcclosure or function(f)
+                return f
+            end
+            old = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+                local m = getnamecallmethod()
+                if rb.on and (m == "FireServer" or m == "InvokeServer") then
+                    local isS = false
+                    if checkcaller then
+                        isS = checkcaller()
+                    end
+                    pcall(record, self, m, isS, table.pack(...))
+                end
+                return old(self, ...)
+            end))
+        end
+
+        local function openFile()
+            if rb.file or not writefile then
+                return
+            end
+            pcall(function()
+                if makefolder and not (isfolder and isfolder("NexusStella_Log")) then
+                    makefolder("NexusStella_Log")
+                end
+            end)
+            local f = "NexusStella_Log/RB_" .. tostring(os.date("%Y%m%d_%H%M%S")) .. ".txt"
+            local head = "Nexus Stella RecorderBatch log | user=" .. tostring(player.Name) .. " | place=" .. tostring(game.PlaceId) .. "\n"
+            local ok = pcall(writefile, f, head)
+            if ok then
+                rb.file = f
+                rb.size = 0
+                rb.full = head
+                rb.t0 = clockNow()
+                dumpSettings()
+            end
+        end
+
+        entitiesCache.rbMark = function(text)
+            if rb.on and autoFarmEnabled and not rb.file then
+                pcall(openFile)
+            end
+            if rb.on and autoFarmEnabled and rb.file then
+                pcall(add, "MARK " .. tostring(text))
+            end
+        end
+
+        TabSetting:AddToggle({
+            Name = "Anti Macro Log",
+            Default = true,
+            Flag = "AntiMacroLog",
+            Callback = function(Value)
+                rb.on = Value == true
+                if rb.on then
+                    pcall(hook)
+                end
+            end
+        })
+
+        task.spawn(function()
+            local lastFarm = false
+            local cntAt = clockNow()
+            while true do
+                if rb.on and autoFarmEnabled then
+                    if not lastFarm then
+                        openFile()
+                        pcall(hook)
+                        add("MARK FARM_ON")
+                    end
+                    if clockNow() - cntAt >= 60 then
+                        cntAt = clockNow()
+                        local c = {}
+                        for k, v in pairs(rb.counts) do
+                            c[#c + 1] = k .. "=" .. v
+                        end
+                        table.sort(c)
+                        add("COUNTS " .. table.concat(c, " "))
+                    end
+                elseif lastFarm and rb.file then
+                    rb.buf[#rb.buf + 1] = "[farm off]\n"
+                    flush()
+                    rb.file = nil
+                end
+                lastFarm = rb.on and autoFarmEnabled
+                if clockNow() - (rb.flushAt or 0) >= 5 then
+                    rb.flushAt = clockNow()
+                    flush()
+                end
+                task.wait(0.25)
+            end
+        end)
+    end
+    rbSetup()
 end
 
 TabSetting:AddToggle({
