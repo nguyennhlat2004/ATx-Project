@@ -117,14 +117,7 @@ local initialized, initError = pcall(function()
         return character, root
     end
 
-    local function teleportTo(object)
-        local character = characterRoot()
-        local target = findPosition(object)
-        if not target then
-            error("Không tìm thấy vị trí của đối tượng.")
-        end
-        character:PivotTo(target * CFrame.new(0, 3, 4))
-    end
+    local teleportTo
 
     local function nearest(objects, root)
         local best, bestDistance
@@ -359,6 +352,748 @@ local initialized, initError = pcall(function()
         end
     end
 
+    local RunService = game:GetService("RunService")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local HttpService = game:GetService("HttpService")
+    local Player = Window:AddTab({ Title = "Player", Icon = "user" })
+    local mapFolder
+    local mapConnections = {}
+    local mapDoors = {}
+    local mapTouches = {}
+    local mapSafes = {}
+    local mapHides = {}
+    local safePrompts = {}
+    local safePromptConnections = {}
+    local enemies = {}
+    local espEntries = {}
+    local espEnabled = { Items = false, Enemy = false, Hide = false }
+    local featureConnections = {}
+    local flyActive = false
+    local flySerial = 0
+    local tpWalk = false
+    local tpSpeed = 16
+    local safeAura = false
+    local safeJob = false
+    local safeAttempted = {}
+    local uploadToken = nil
+    local safeGeneration = 0
+    local lastSafeNotice = -math.huge
+    local espGui = Instance.new("ScreenGui")
+    espGui.Name = "PetapetaESP"
+    espGui.ResetOnSpawn = false
+    espGui.IgnoreGuiInset = true
+    espGui.Parent = CoreGui
+
+    local function findAncestorNamed(object, name)
+        local current = object
+        while current and current ~= Workspace do
+            if current.Name == name then
+                return current
+            end
+            current = current.Parent
+        end
+        return nil
+    end
+
+    local function removeMapObject(object)
+        mapDoors[object] = nil
+        mapTouches[object] = nil
+        mapSafes[object] = nil
+        mapHides[object] = nil
+        safePrompts[object] = nil
+        local connection = safePromptConnections[object]
+        if connection then
+            connection:Disconnect()
+            safePromptConnections[object] = nil
+        end
+    end
+
+    local function addMapObject(object)
+        if object:IsA("Model") and object.Name:match("^Fusuma%d+$") then
+            mapDoors[object] = true
+        elseif object:IsA("Model") and object.Name == "Safe" then
+            mapSafes[object] = true
+        elseif object:IsA("Model") and object.Name == "HideTansu" then
+            mapHides[object] = true
+        elseif object:IsA("BasePart") and (object.Name == "EventArea" or object.Name == "closePart") then
+            mapTouches[object] = true
+        elseif object:IsA("ProximityPrompt") and findAncestorNamed(object, "PaintingGimmickFailure") then
+            safePrompts[object] = true
+            local function enable()
+                guarded(function()
+                    if alive and object.Parent and not object.Enabled then
+                        object.Enabled = true
+                    end
+                end)
+            end
+            safePromptConnections[object] = object:GetPropertyChangedSignal("Enabled"):Connect(enable)
+            enable()
+        end
+    end
+
+    local function bindMap(folder)
+        if folder == mapFolder then
+            return
+        end
+        disconnectAll(mapConnections)
+        for prompt, connection in pairs(safePromptConnections) do
+            connection:Disconnect()
+            safePromptConnections[prompt] = nil
+        end
+        table.clear(mapDoors)
+        table.clear(mapTouches)
+        table.clear(mapSafes)
+        table.clear(mapHides)
+        table.clear(safePrompts)
+        mapFolder = folder
+        if not folder then
+            return
+        end
+        for _, object in ipairs(folder:GetDescendants()) do
+            addMapObject(object)
+        end
+        table.insert(mapConnections, folder.DescendantAdded:Connect(function(object)
+            guarded(function()
+                addMapObject(object)
+            end)
+        end))
+        table.insert(mapConnections, folder.DescendantRemoving:Connect(function(object)
+            guarded(function()
+                removeMapObject(object)
+            end)
+        end))
+    end
+
+    local oldRefreshPaths = refreshPaths
+    refreshPaths = function()
+        oldRefreshPaths()
+        local server = Workspace:FindFirstChild("Server")
+        local generated = server and server:FindFirstChild("MapGenerated")
+        bindMap(generated and generated:FindFirstChild("Rooms"))
+    end
+
+    local function trackEnemy(object)
+        if object:IsA("Model") and object.Name == "ModelEnemy" then
+            enemies[object] = true
+        end
+    end
+
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        trackEnemy(object)
+    end
+    table.insert(featureConnections, Workspace.DescendantAdded:Connect(function(object)
+        guarded(function()
+            trackEnemy(object)
+        end)
+    end))
+    table.insert(featureConnections, Workspace.DescendantRemoving:Connect(function(object)
+        enemies[object] = nil
+    end))
+
+    local function promptPosition(prompt)
+        local holder = prompt.Parent
+        if not holder then
+            return nil
+        end
+        if holder:IsA("Attachment") then
+            return holder.WorldPosition
+        end
+        local cf = findPosition(holder)
+        return cf and cf.Position or nil
+    end
+
+    local function tryDoor(door, character, root)
+        local prim = door:FindFirstChild("Prim", true)
+        if prim then
+            for _, descendant in ipairs(prim:GetDescendants()) do
+                if descendant:IsA("ProximityPrompt") and descendant.Enabled then
+                    local position = promptPosition(descendant)
+                    if position and (position - root.Position).Magnitude <= descendant.MaxActivationDistance and type(fireproximityprompt) == "function" then
+                        guarded(function()
+                            fireproximityprompt(descendant)
+                        end)
+                    end
+                end
+            end
+        end
+        if type(firetouchinterest) == "function" then
+            for part in pairs(mapTouches) do
+                if part.Parent and (part.Position - root.Position).Magnitude <= 12 then
+                    guarded(function()
+                        firetouchinterest(root, part, 0)
+                        firetouchinterest(root, part, 1)
+                    end)
+                end
+            end
+        end
+    end
+
+    local function doorPoint(door, from)
+        local prim = door:FindFirstChild("Prim", true)
+        local cf = prim and findPosition(prim) or findPosition(door)
+        if not cf then
+            return nil
+        end
+        local side = (from - cf.Position):Dot(cf.LookVector) >= 0 and 1 or -1
+        return cf.Position + cf.LookVector * side * 3, cf.Position
+    end
+
+    teleportTo = function(target)
+        if flyActive then
+            error("Đang bay tới mục tiêu khác.")
+        end
+        local character, root = characterRoot()
+        local targetCF = findPosition(target)
+        if not targetCF then
+            error("Không tìm thấy vị trí của mục tiêu.")
+        end
+        refreshPaths()
+        local targetPosition = targetCF.Position
+        local side = (root.Position - targetPosition):Dot(targetCF.LookVector) >= 0 and 1 or -1
+        local finish = targetPosition + targetCF.LookVector * side * 4 + Vector3.new(0, 2, 0)
+        local start = root.Position
+        local path = finish - start
+        local pathLengthSquared = path:Dot(path)
+        local candidates = {}
+        if pathLengthSquared > 1 then
+            for door in pairs(mapDoors) do
+                if door.Parent then
+                    local point = doorPoint(door, start)
+                    if point then
+                        local projection = (point - start):Dot(path) / pathLengthSquared
+                        if projection > 0 and projection < 1 and (point - (start + path * projection)).Magnitude <= 12 then
+                            table.insert(candidates, { door = door, point = point, order = projection })
+                        end
+                    end
+                end
+            end
+        end
+        table.sort(candidates, function(a, b)
+            return a.order < b.order
+        end)
+        local waypoints = {}
+        for i = 1, math.min(#candidates, 8) do
+            table.insert(waypoints, candidates[i])
+        end
+        table.insert(waypoints, { point = finish })
+        local length = 0
+        local previous = start
+        for _, waypoint in ipairs(waypoints) do
+            length = length + (waypoint.point - previous).Magnitude
+            previous = waypoint.point
+        end
+        local duration = math.clamp(length / 200, 0.2, 3)
+        flyActive = true
+        flySerial = flySerial + 1
+        local serial = flySerial
+        local collisions = {}
+        local added
+        local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+        local oldPlatform = humanoid and humanoid.PlatformStand
+        local function disableCollision(part)
+            if part:IsA("BasePart") and collisions[part] == nil then
+                collisions[part] = part.CanCollide
+                part.CanCollide = false
+            end
+        end
+        local success, failure = pcall(function()
+            for _, part in ipairs(character:GetDescendants()) do
+                disableCollision(part)
+            end
+            added = character.DescendantAdded:Connect(function(part)
+                guarded(function()
+                    disableCollision(part)
+                end)
+            end)
+            if humanoid then
+                humanoid.PlatformStand = true
+            end
+            for _, waypoint in ipairs(waypoints) do
+                if not alive or serial ~= flySerial or not root.Parent or Players.LocalPlayer.Character ~= character then
+                    error("Đã hủy chuyến bay.")
+                end
+                local from = root.Position
+                local segment = (waypoint.point - from).Magnitude
+                local segmentTime = math.max(0.01, duration * segment / math.max(length, 1))
+                local elapsed = 0
+                while elapsed < segmentTime do
+                    if not alive or serial ~= flySerial or not root.Parent or Players.LocalPlayer.Character ~= character then
+                        error("Đã hủy chuyến bay.")
+                    end
+                    local delta = RunService.Heartbeat:Wait()
+                    elapsed = elapsed + delta
+                    local position = from:Lerp(waypoint.point, math.min(elapsed / segmentTime, 1))
+                    local look = waypoint.point - position
+                    if look.Magnitude < 0.01 then
+                        look = targetPosition - position
+                    end
+                    if look.Magnitude < 0.01 then
+                        look = root.CFrame.LookVector
+                    end
+                    root.AssemblyLinearVelocity = Vector3.new()
+                    character:PivotTo(CFrame.lookAt(position, position + look))
+                end
+                if waypoint.door and waypoint.door.Parent then
+                    tryDoor(waypoint.door, character, root)
+                end
+            end
+            local direction = targetPosition - root.Position
+            if direction.Magnitude > 0.01 then
+                character:PivotTo(CFrame.lookAt(root.Position, targetPosition))
+                local camera = Workspace.CurrentCamera
+                if camera then
+                    camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetPosition)
+                end
+            end
+        end)
+        if added then
+            added:Disconnect()
+        end
+        for part, value in pairs(collisions) do
+            pcall(function()
+                if part.Parent then
+                    part.CanCollide = value
+                end
+            end)
+        end
+        if humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.PlatformStand = oldPlatform
+            end)
+        end
+        flyActive = false
+        if not success then
+            error(failure)
+        end
+    end
+
+    local function getCircleFrames(safe, index)
+        local door = safe:FindFirstChild("Door")
+        local lock = door and door:FindFirstChild("Lock")
+        local circle = lock and lock:FindFirstChild("Circle" .. index)
+        local gui = circle and circle:FindFirstChild("SurfaceGui")
+        if not gui then
+            return nil
+        end
+        local frames = {}
+        for _, object in ipairs(gui:GetChildren()) do
+            if object:IsA("Frame") then
+                local labels = {}
+                for _, label in ipairs(object:GetDescendants()) do
+                    if label:IsA("TextLabel") then
+                        table.insert(labels, label.Text)
+                    end
+                end
+                if #labels > 0 then
+                    table.insert(frames, { name = object.Name, order = object.LayoutOrder, xScale = object.Position.X.Scale, xOffset = object.Position.X.Offset, yScale = object.Position.Y.Scale, yOffset = object.Position.Y.Offset, labels = labels })
+                end
+            end
+        end
+        return frames
+    end
+
+    local function closestSafe(root)
+        local all = {}
+        for safe in pairs(mapSafes) do
+            if safe.Parent then all[safe] = true end
+        end
+        for _, entry in pairs(rooms) do
+            if entry.safe and entry.safe.Parent then all[entry.safe] = true end
+        end
+        local readable = {}
+        for safe in pairs(all) do
+            local door = safe:FindFirstChild("Door")
+            local lock = door and door:FindFirstChild("Lock")
+            if lock and lock:FindFirstChild("Circle1") and lock:FindFirstChild("Circle2") and lock:FindFirstChild("Circle3") then
+                readable[safe] = true
+            end
+        end
+        return nearest(readable, root) or nearest(all, root)
+    end
+
+    local function safeIsOpen(safe)
+        local value = safe and safe:FindFirstChild("Unlocked")
+        return value and value:IsA("BoolValue") and value.Value == true
+    end
+
+    local function safeNote(text)
+        if os.clock() - lastSafeNotice > 12 then
+            lastSafeNotice = os.clock()
+            notify(text)
+        end
+    end
+
+    local function makeSafeData()
+        refreshPaths()
+        local _, root = characterRoot()
+        local safe = closestSafe(root)
+        if not safe then
+            error("Không tìm thấy Safe để xuất dữ liệu.")
+        end
+        local circles = {}
+        for i = 1, 3 do
+            circles[i] = getCircleFrames(safe, i) or {}
+        end
+        local hints = {}
+        for _, entry in pairs(rooms) do
+            if entry.hint and entry.hint.Parent then
+                table.insert(hints, { path = entry.hint:GetFullName(), text = entry.hint.Text })
+            end
+        end
+        return HttpService:JSONEncode({ safePath = safe:GetFullName(), circles = circles, hints = hints })
+    end
+
+    local function exportSafe()
+        local data = makeSafeData()
+        local saved = false
+        local copied = false
+        if type(writefile) == "function" then
+            saved = pcall(writefile, "Petapeta_Safe_Diagnostic.json", data)
+        end
+        if type(setclipboard) == "function" then
+            copied = pcall(setclipboard, data)
+        end
+        if not saved and not copied then
+            error("Executor không hỗ trợ writefile hoặc setclipboard.")
+        end
+        notify("Đã xuất dữ liệu Safe" .. (saved and " vào Petapeta_Safe_Diagnostic.json" or "") .. (copied and " và clipboard" or "") .. ". Hãy gửi dữ liệu cho mình.", 12)
+    end
+
+    local function runSafeJob(safe, prompt, generation)
+        if safeJob then return end
+        safeJob = true
+        local ok, err = pcall(function()
+            local event = ReplicatedStorage:FindFirstChild("MemoTextColorUpdateEvent")
+            if not event or not event:IsA("RemoteEvent") then
+                error("Không tìm thấy MemoTextColorUpdateEvent.")
+            end
+            if type(fireproximityprompt) ~= "function" then
+                error("Executor không hỗ trợ fireproximityprompt.")
+            end
+            local counts = {}
+            for i = 1, 3 do
+                local frames = getCircleFrames(safe, i)
+                if not frames or #frames == 0 then
+                    error("Không đọc được Frame ở Circle" .. i .. ". Hãy xuất dữ liệu Safe.")
+                end
+                counts[i] = math.min(#frames, 20)
+            end
+            fireproximityprompt(prompt)
+            task.wait(0.3)
+            local tries = 0
+            for a = 1, counts[1] do
+                for b = 1, counts[2] do
+                    for c = 1, counts[3] do
+                        if not alive or not safeAura or generation ~= safeGeneration or not safe.Parent or not prompt.Parent then
+                            return
+                        end
+                        local player = Players.LocalPlayer
+                        local character = player and player.Character
+                        local root = character and character:FindFirstChild("HumanoidRootPart")
+                        local pos = promptPosition(prompt)
+                        if not root or not pos or (root.Position - pos).Magnitude > prompt.MaxActivationDistance then
+                            error("Đã rời khỏi tầm của prompt Safe.")
+                        end
+                        if safeIsOpen(safe) then
+                            notify("Safe đã được báo mở.")
+                            return
+                        end
+                        event:FireServer({ a, b, c })
+                        tries = tries + 1
+                        task.wait(0.1)
+                    end
+                end
+            end
+            if safeIsOpen(safe) then
+                notify("Safe đã được báo mở.")
+            else
+                notify("Đã thử " .. tries .. " tổ hợp nhưng chưa xác nhận Safe mở. Remote có thể chỉ cập nhật màu.", 12)
+            end
+        end)
+        safeJob = false
+        if not ok then
+            notify("Safe Aura: " .. tostring(err), 8)
+        end
+    end
+
+    local function renderPart(object)
+        if object:IsA("BasePart") then
+            return object
+        end
+        if object:IsA("Model") then
+            return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+        end
+        return nil
+    end
+
+    local function destroyEsp(object)
+        local entry = espEntries[object]
+        if entry then
+            entry.highlight:Destroy()
+            entry.billboard:Destroy()
+            entry.line:Destroy()
+            espEntries[object] = nil
+        end
+    end
+
+    local function createEsp(object, kind, title, color)
+        local part = renderPart(object)
+        if not part then return end
+        local highlight = Instance.new("Highlight")
+        highlight.Adornee = object
+        highlight.FillColor = color
+        highlight.OutlineColor = color
+        highlight.FillTransparency = 0.65
+        highlight.OutlineTransparency = 0
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Parent = espGui
+        local billboard = Instance.new("BillboardGui")
+        billboard.Adornee = part
+        billboard.AlwaysOnTop = true
+        billboard.Size = UDim2.fromOffset(180, 52)
+        billboard.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+        billboard.Parent = espGui
+        local text = Instance.new("TextLabel")
+        text.BackgroundTransparency = 1
+        text.Size = UDim2.fromScale(1, 1)
+        text.Font = Enum.Font.FredokaOne
+        text.TextSize = 14
+        text.TextColor3 = color
+        text.TextStrokeTransparency = 0
+        text.Parent = billboard
+        local line = Instance.new("Frame")
+        line.AnchorPoint = Vector2.new(0.5, 0.5)
+        line.BackgroundColor3 = color
+        line.BorderSizePixel = 0
+        line.Visible = false
+        line.Parent = espGui
+        espEntries[object] = { highlight = highlight, billboard = billboard, text = text, line = line, part = part, kind = kind, title = title }
+    end
+
+    local function collectEsp()
+        local wanted = {}
+        if espEnabled.Items then
+            for key in pairs(keys) do wanted[key] = { "Items", "Key", Color3.fromRGB(0, 255, 100) } end
+            for box in pairs(boxes) do wanted[box] = { "Items", box.Name, Color3.fromRGB(0, 255, 100) } end
+            for _, entry in pairs(rooms) do
+                if entry.paper then wanted[entry.paper] = { "Items", "Hint Paper", Color3.fromRGB(0, 255, 100) } end
+                if entry.safe then wanted[entry.safe] = { "Items", "Safe", Color3.fromRGB(0, 255, 100) } end
+            end
+        end
+        if espEnabled.Enemy then
+            for enemy in pairs(enemies) do wanted[enemy] = { "Enemy", "Petapeta", Color3.fromRGB(255, 50, 50) } end
+        end
+        if espEnabled.Hide then
+            for hide in pairs(mapHides) do wanted[hide] = { "Hide", "Tủ trốn", Color3.fromRGB(255, 225, 0) } end
+        end
+        for object, entry in pairs(espEntries) do
+            if not wanted[object] or not object.Parent or not entry.part.Parent or entry.part ~= object and not entry.part:IsDescendantOf(object) then
+                destroyEsp(object)
+            end
+        end
+        for object, info in pairs(wanted) do
+            if object.Parent and not espEntries[object] then
+                guarded(function() createEsp(object, info[1], info[2], info[3]) end)
+            end
+        end
+    end
+
+    local function updateEsp()
+        local camera = Workspace.CurrentCamera
+        local player = Players.LocalPlayer
+        local character = player and player.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not camera then return end
+        for object, entry in pairs(espEntries) do
+            if object.Parent and entry.part.Parent then
+                local pos = entry.part.Position
+                local distance = root and math.floor((pos - root.Position).Magnitude + 0.5) or 0
+                entry.text.Text = entry.title .. "\n" .. distance .. " studs"
+                local point, visible = camera:WorldToViewportPoint(pos)
+                entry.line.Visible = visible and point.Z > 0
+                if entry.line.Visible then
+                    local origin = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+                    local dest = Vector2.new(point.X, point.Y)
+                    local diff = dest - origin
+                    entry.line.Position = UDim2.fromOffset((origin.X + dest.X) / 2, (origin.Y + dest.Y) / 2)
+                    entry.line.Size = UDim2.fromOffset(diff.Magnitude, 1)
+                    entry.line.Rotation = math.deg(math.atan2(diff.Y, diff.X))
+                end
+            end
+        end
+    end
+
+    local function uploadSafeData()
+        if not uploadToken or uploadToken == "" then
+            error("Hãy nhập token GitHub vào ô phía trên trước khi tải log.")
+        end
+        local requestFn = request or http_request or (syn and syn.request) or (http and http.request)
+        if type(requestFn) ~= "function" then
+            error("Executor không hỗ trợ HTTP request.")
+        end
+        local data = makeSafeData()
+        local api = "https://api.github.com/repos/nguyennhlat2004/ATx-Project"
+        local function github(method, path, body)
+            local options = {
+                Url = api .. path,
+                Method = method,
+                Headers = {
+                    Authorization = "Bearer " .. uploadToken,
+                    Accept = "application/vnd.github+json",
+                    ["Content-Type"] = "application/json",
+                    ["X-GitHub-Api-Version"] = "2022-11-28"
+                }
+            }
+            if body then options.Body = HttpService:JSONEncode(body) end
+            local success, result = pcall(requestFn, options)
+            if not success or type(result) ~= "table" then
+                error("Không thể kết nối API GitHub.")
+            end
+            local code = tonumber(result.StatusCode or result.Status or 0) or 0
+            if code < 200 or code >= 300 then
+                error("GitHub API trả mã " .. tostring(code) .. ". Kiểm tra token, quyền repo hoặc nhánh main.")
+            end
+            local parsed, decoded = pcall(function() return HttpService:JSONDecode(result.Body or "") end)
+            if not parsed or type(decoded) ~= "table" then
+                error("Không đọc được phản hồi từ GitHub API.")
+            end
+            return decoded
+        end
+        local ref = github("GET", "/git/ref/heads/main")
+        local parent = ref.object and ref.object.sha
+        if not parent then error("Không đọc được commit main.") end
+        local commit = github("GET", "/git/commits/" .. parent)
+        local baseTree = commit.tree and commit.tree.sha
+        if not baseTree then error("Không đọc được tree main.") end
+        local blob = github("POST", "/git/blobs", { content = data, encoding = "utf-8" })
+        if not blob.sha then error("Không tạo được blob log.") end
+        local tree = github("POST", "/git/trees", { base_tree = baseTree, tree = { { path = "Petapeta_Safe_Diagnostic.json", mode = "100644", type = "blob", sha = blob.sha } } })
+        if not tree.sha then error("Không tạo được tree log.") end
+        local newCommit = github("POST", "/git/commits", { message = "", tree = tree.sha, parents = { parent } })
+        if not newCommit.sha then error("Không tạo được commit rỗng cho log.") end
+        github("PATCH", "/git/refs/heads/main", { sha = newCommit.sha, force = false })
+        uploadToken = nil
+        notify("Đã tải Petapeta_Safe_Diagnostic.json lên GitHub; token đã xóa khỏi bộ nhớ script.", 10)
+    end
+
+    local SafeSection = Main:AddSection("Safe Aura")
+    SafeSection:AddToggle("SafeAura", {
+        Title = "Auto Open Safe (Thử nghiệm)",
+        Default = false,
+        Callback = runCallback(function(value)
+            safeAura = value
+            safeGeneration = safeGeneration + 1
+            if value then
+                table.clear(safeAttempted)
+                notify("Safe Aura thử tổ hợp với MemoTextColorUpdateEvent; chưa đảm bảo mở được Safe.", 10)
+            end
+        end)
+    })
+    SafeSection:AddButton({ Title = "Export Safe Data", Callback = runCallback(exportSafe) })
+    local tokenInput
+    local clearingToken = false
+    tokenInput = SafeSection:AddInput("SafeUploadToken", {
+        Title = "GitHub Token (tạm thời)",
+        Placeholder = "Dán token rồi xác nhận",
+        Finished = true,
+        Callback = runCallback(function(value)
+            if clearingToken or value == "" then return end
+            uploadToken = value
+            clearingToken = true
+            if tokenInput then tokenInput:SetValue("") end
+            clearingToken = false
+            notify("Đã nhận token trong bộ nhớ; ô nhập đã được xóa.")
+        end)
+    })
+    SafeSection:AddButton({ Title = "Upload Safe Data to GitHub", Callback = runCallback(uploadSafeData) })
+
+    local EspSection = Main:AddSection("ESP")
+    EspSection:AddToggle("EspItems", { Title = "ESP Items", Default = false, Callback = runCallback(function(value)
+        espEnabled.Items = value
+        if value then
+            refreshPaths()
+            if not next(keys) and not next(boxes) and not next(rooms) then notify("Chưa tìm thấy items; ESP sẽ tiếp tục chờ.") end
+        end
+    end) })
+    EspSection:AddToggle("EspEnemy", { Title = "ESP Petapeta", Default = false, Callback = runCallback(function(value)
+        espEnabled.Enemy = value
+        if value and not next(enemies) then notify("Chưa tìm thấy ModelEnemy; ESP sẽ tiếp tục chờ.") end
+    end) })
+    EspSection:AddToggle("EspHide", { Title = "ESP Tủ Trốn", Default = false, Callback = runCallback(function(value)
+        espEnabled.Hide = value
+        if value then
+            refreshPaths()
+            if not next(mapHides) then notify("Chưa tìm thấy HideTansu; ESP sẽ tiếp tục chờ.") end
+        end
+    end) })
+
+    local PlayerSection = Player:AddSection("Walk Speed")
+    PlayerSection:AddToggle("TPWalk", { Title = "Walk Speed", Default = false, Callback = runCallback(function(value) tpWalk = value end) })
+    PlayerSection:AddSlider("TPWalkSpeed", { Title = "Speed (stud/s)", Default = 16, Min = 16, Max = 200, Rounding = 0, Callback = runCallback(function(value) tpSpeed = value end) })
+
+    table.insert(featureConnections, RunService.Heartbeat:Connect(function(delta)
+        guarded(function()
+            if tpWalk and not flyActive then
+                local player = Players.LocalPlayer
+                local character = player and player.Character
+                local humanoid = character and character:FindFirstChildWhichIsA("Humanoid")
+                if humanoid and humanoid.Health > 0 and humanoid.MoveDirection.Magnitude > 0 then
+                    local extra = math.max(0, tpSpeed - humanoid.WalkSpeed)
+                    character:TranslateBy(humanoid.MoveDirection * extra * delta)
+                end
+            end
+        end)
+    end))
+    table.insert(featureConnections, RunService.RenderStepped:Connect(function()
+        guarded(updateEsp)
+    end))
+    task.spawn(function()
+        while alive do
+            guarded(collectEsp)
+            task.wait(1)
+        end
+    end)
+    task.spawn(function()
+        while alive do
+            if safeAura and not safeJob then
+                guarded(function()
+                    local player = Players.LocalPlayer
+                    local character = player and player.Character
+                    local root = character and character:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        local prompt, promptDistance
+                        for candidate in pairs(safePrompts) do
+                            local position = promptPosition(candidate)
+                            if position then
+                                local distance = (position - root.Position).Magnitude
+                                if not promptDistance or distance < promptDistance then
+                                    prompt = candidate
+                                    promptDistance = distance
+                                end
+                            end
+                        end
+                        if not prompt then
+                            safeNote("Chưa tìm thấy prompt PaintingGimmickFailure; cần tìm Hint Paper trước.")
+                        else
+                            local position = promptPosition(prompt)
+                            local safe = closestSafe(root)
+                            if not safe then
+                                safeNote("Chưa tìm thấy Safe trong các Room đã tải.")
+                            elseif safeIsOpen(safe) then
+                                safeNote("Safe gần nhất đã mở.")
+                            elseif position and (position - root.Position).Magnitude <= prompt.MaxActivationDistance and not safeAttempted[safe] then
+                                safeAttempted[safe] = true
+                                local generation = safeGeneration
+                                task.spawn(function() runSafeJob(safe, prompt, generation) end)
+                            end
+                        end
+                    end
+                end)
+            end
+            task.wait(1)
+        end
+    end)
+
     local Teleport = Main:AddSection("Teleport")
 
     Teleport:AddButton({
@@ -553,6 +1288,20 @@ local initialized, initError = pcall(function()
     if env then
         env.PetapetaCleanup = function()
             alive = false
+            safeAura = false
+            safeGeneration = safeGeneration + 1
+            flySerial = flySerial + 1
+            uploadToken = nil
+            disconnectAll(featureConnections)
+            disconnectAll(mapConnections)
+            for prompt, connection in pairs(safePromptConnections) do
+                connection:Disconnect()
+                safePromptConnections[prompt] = nil
+            end
+            for object in pairs(espEntries) do
+                destroyEsp(object)
+            end
+            pcall(function() espGui:Destroy() end)
             disconnectAll(roomFolderConnections)
             disconnectAll(itemFolderConnections)
             for room in pairs(rooms) do
