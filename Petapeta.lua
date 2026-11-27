@@ -59,6 +59,9 @@ local initialized, initError = pcall(function()
     local itemFolderConnections = {}
     local rooms = {}
     local boxes = {}
+    local keys = {}
+    local originalHolds = {}
+    local autoCollectKey = false
     local lastBackgroundError = 0
 
     local function disconnectAll(connections)
@@ -234,26 +237,97 @@ local initialized, initError = pcall(function()
         end
     end
 
+    local function restoreHold(prompt)
+        local original = originalHolds[prompt]
+        if original ~= nil then
+            pcall(function()
+                if prompt.Parent and prompt.HoldDuration == 0 then
+                    prompt.HoldDuration = original
+                end
+            end)
+            originalHolds[prompt] = nil
+        end
+    end
+
+    local function removeKey(key)
+        local entry = keys[key]
+        if not entry then
+            return
+        end
+        if entry.prompt then
+            restoreHold(entry.prompt)
+        end
+        disconnectAll(entry.connections)
+        keys[key] = nil
+    end
+
+    local function addKey(key)
+        if key.Name ~= "Key" or keys[key] then
+            return
+        end
+        local entry = { connections = {}, pending = false }
+        keys[key] = entry
+        local function refreshPrompt()
+            local point = key:FindFirstChild("InteractPoint")
+            local prompt = point and point:FindFirstChild("ItemInteractP")
+            if prompt and not prompt:IsA("ProximityPrompt") then
+                prompt = nil
+            end
+            if entry.prompt and entry.prompt ~= prompt then
+                restoreHold(entry.prompt)
+            end
+            entry.prompt = prompt
+        end
+        local function scheduleRefresh()
+            if entry.pending then
+                return
+            end
+            entry.pending = true
+            task.defer(function()
+                entry.pending = false
+                guarded(function()
+                    if alive and keys[key] == entry then
+                        refreshPrompt()
+                    end
+                end)
+            end)
+        end
+        table.insert(entry.connections, key.DescendantAdded:Connect(scheduleRefresh))
+        table.insert(entry.connections, key.DescendantRemoving:Connect(scheduleRefresh))
+        refreshPrompt()
+    end
+
+    local function addItem(item)
+        addBox(item)
+        addKey(item)
+    end
+
     local function bindItems(folder)
         if itemFolder == folder then
             return
         end
         disconnectAll(itemFolderConnections)
         table.clear(boxes)
+        for key in pairs(keys) do
+            removeKey(key)
+        end
         itemFolder = folder
         if not folder then
             return
         end
         for _, item in ipairs(folder:GetChildren()) do
-            addBox(item)
+            addItem(item)
         end
         table.insert(itemFolderConnections, folder.ChildAdded:Connect(function(item)
             guarded(function()
-                addBox(item)
+                addItem(item)
             end)
         end))
         table.insert(itemFolderConnections, folder.ChildRemoved:Connect(function(item)
-            boxes[item] = nil
+            guarded(function()
+                boxes[item] = nil
+                removeKey(item)
+            end)
         end))
     end
 
@@ -266,15 +340,17 @@ local initialized, initError = pcall(function()
     end
 
     local function runCallback(callback)
-        return function()
-            local ok, err = pcall(callback)
+        return function(...)
+            local ok, err = pcall(callback, ...)
             if not ok then
                 notify("Lỗi: " .. tostring(err))
             end
         end
     end
 
-    Main:AddButton({
+    local Teleport = Main:AddSection("Teleport")
+
+    Teleport:AddButton({
         Title = "Teleport To Safe",
         Callback = runCallback(function()
             refreshPaths()
@@ -293,7 +369,7 @@ local initialized, initError = pcall(function()
         end)
     })
 
-    Main:AddButton({
+    Teleport:AddButton({
         Title = "Teleport To Ofuda Box",
         Callback = runCallback(function()
             refreshPaths()
@@ -306,7 +382,62 @@ local initialized, initError = pcall(function()
         end)
     })
 
-    Main:AddButton({
+    Teleport:AddButton({
+        Title = "Teleport To Key",
+        Callback = runCallback(function()
+            refreshPaths()
+            local _, root = characterRoot()
+            local available = {}
+            for key in pairs(keys) do
+                if key.Parent then
+                    available[key] = true
+                end
+            end
+            local key = nearest(available, root)
+            if not key then
+                error("Không tìm thấy Key trong SpawnedItems.")
+            end
+            teleportTo(key)
+        end)
+    })
+
+    local Aura = Main:AddSection("Aura")
+    local autoKeyToggle
+    autoKeyToggle = Aura:AddToggle("AutoCollectKey", {
+        Title = "Auto Collect Key",
+        Default = false,
+        Callback = runCallback(function(value)
+            if value and type(fireproximityprompt) ~= "function" then
+                notify("Executor không hỗ trợ fireproximityprompt.")
+                if autoKeyToggle then
+                    autoKeyToggle:SetValue(false)
+                end
+                return
+            end
+            autoCollectKey = value
+            if not value then
+                for prompt in pairs(originalHolds) do
+                    restoreHold(prompt)
+                end
+                return
+            end
+            refreshPaths()
+            local found = false
+            for _, entry in pairs(keys) do
+                if entry.prompt and entry.prompt.Parent then
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                notify("Chưa tìm thấy ItemInteractP của Key; sẽ tiếp tục chờ.")
+            end
+        end)
+    })
+
+    local Other = Main:AddSection("Khác")
+
+    Other:AddButton({
         Title = "Show Hint Paper",
         Callback = runCallback(function()
             refreshPaths()
@@ -397,6 +528,12 @@ local initialized, initError = pcall(function()
             for room in pairs(rooms) do
                 removeRoom(room)
             end
+            for key in pairs(keys) do
+                removeKey(key)
+            end
+            for prompt in pairs(originalHolds) do
+                restoreHold(prompt)
+            end
             table.clear(boxes)
             pcall(function()
                 logoGui:Destroy()
@@ -414,6 +551,43 @@ local initialized, initError = pcall(function()
         while alive do
             guarded(refreshPaths)
             task.wait(2)
+        end
+    end)
+    task.spawn(function()
+        while alive do
+            if autoCollectKey then
+                guarded(function()
+                    local _, root = characterRoot()
+                    for _, entry in pairs(keys) do
+                        local prompt = entry.prompt
+                        if prompt and prompt.Parent then
+                            guarded(function()
+                                if originalHolds[prompt] == nil then
+                                    originalHolds[prompt] = prompt.HoldDuration
+                                end
+                                if prompt.HoldDuration ~= 0 then
+                                    prompt.HoldDuration = 0
+                                end
+                                local holder = prompt.Parent
+                                local position
+                                if holder:IsA("Attachment") then
+                                    position = holder.WorldPosition
+                                else
+                                    local cf = findPosition(holder)
+                                    position = cf and cf.Position
+                                end
+                                if not position then
+                                    error("Không tìm thấy vị trí ItemInteractP của Key.")
+                                end
+                                if prompt.Enabled and (position - root.Position).Magnitude <= prompt.MaxActivationDistance then
+                                    fireproximityprompt(prompt)
+                                end
+                            end)
+                        end
+                    end
+                end)
+            end
+            task.wait(0.2)
         end
     end)
     notify("Đã tải. Nhấn logo để mở giao diện.")
