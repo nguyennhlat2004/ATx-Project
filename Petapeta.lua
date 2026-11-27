@@ -54,11 +54,8 @@ local initialized, initError = pcall(function()
 
     local Main = Window:AddTab({ Title = "Main", Icon = "home" })
     local alive = true
-    local roomFolder
     local itemFolder
-    local roomFolderConnections = {}
     local itemFolderConnections = {}
-    local rooms = {}
     local boxes = {}
     local keys = {}
     local originalHolds = {}
@@ -134,105 +131,6 @@ local initialized, initError = pcall(function()
             end
         end
         return best
-    end
-
-    local function removeRoom(room)
-        local entry = rooms[room]
-        if not entry then
-            return
-        end
-        disconnectAll(entry.connections)
-        disconnectAll(entry.promptConnections)
-        rooms[room] = nil
-    end
-
-    local function refreshRoom(room)
-        local entry = rooms[room]
-        if not entry then
-            return
-        end
-        disconnectAll(entry.promptConnections)
-        local props = room:FindFirstChild("Props")
-        entry.safe = props and props:FindFirstChild("Safe") or nil
-        local paper = room:FindFirstChild("HintPaper")
-        local surface = paper and paper:FindFirstChild("SurfaceGui")
-        local label = surface and surface:FindFirstChild("TextLabel")
-        entry.hint = label and label:IsA("TextLabel") and label or nil
-        entry.paper = paper
-
-        local function watchPrompt(prompt)
-            if not prompt:IsA("ProximityPrompt") then
-                return
-            end
-            local function enable()
-                guarded(function()
-                    if alive and prompt.Parent and not prompt.Enabled then
-                        prompt.Enabled = true
-                    end
-                end)
-            end
-            table.insert(entry.promptConnections, prompt:GetPropertyChangedSignal("Enabled"):Connect(enable))
-            enable()
-        end
-
-        if entry.safe then
-            watchPrompt(entry.safe)
-            for _, descendant in ipairs(entry.safe:GetDescendants()) do
-                watchPrompt(descendant)
-            end
-        end
-    end
-
-    local function addRoom(room)
-        if not room:IsA("Model") or room.Name ~= "Room" or rooms[room] then
-            return
-        end
-        local entry = { connections = {}, promptConnections = {}, pending = false }
-        rooms[room] = entry
-        local function scheduleRefresh()
-            if entry.pending then
-                return
-            end
-            entry.pending = true
-            task.defer(function()
-                entry.pending = false
-                guarded(function()
-                    if alive and rooms[room] == entry then
-                        refreshRoom(room)
-                    end
-                end)
-            end)
-        end
-        table.insert(entry.connections, room.DescendantAdded:Connect(scheduleRefresh))
-        table.insert(entry.connections, room.DescendantRemoving:Connect(scheduleRefresh))
-        refreshRoom(room)
-    end
-
-    local function bindRooms(folder)
-        if roomFolder == folder then
-            return
-        end
-        disconnectAll(roomFolderConnections)
-        for room in pairs(rooms) do
-            removeRoom(room)
-        end
-        roomFolder = folder
-        if not folder then
-            return
-        end
-        for _, room in ipairs(folder:GetChildren()) do
-            addRoom(room)
-        end
-        table.insert(roomFolderConnections, folder.ChildAdded:Connect(function(room)
-            guarded(function()
-                addRoom(room)
-            end)
-        end))
-        table.insert(roomFolderConnections, folder.ChildRemoved:Connect(function(room)
-            guarded(function()
-                removeRoom(room)
-            end)
-        end))
     end
 
     local function addBox(object)
@@ -336,9 +234,6 @@ local initialized, initError = pcall(function()
     end
 
     local function refreshPaths()
-        local client = Workspace:FindFirstChild("Client")
-        local mirror = client and client:FindFirstChild("Mirror")
-        bindRooms(mirror and mirror:FindFirstChild("Rooms"))
         local server = Workspace:FindFirstChild("Server")
         bindItems(server and server:FindFirstChild("SpawnedItems"))
     end
@@ -361,6 +256,7 @@ local initialized, initError = pcall(function()
     local mapDoors = {}
     local mapTouches = {}
     local mapSafes = {}
+    local mapPapers = {}
     local mapHides = {}
     local safePrompts = {}
     local safePromptConnections = {}
@@ -382,7 +278,8 @@ local initialized, initError = pcall(function()
     espGui.Name = "PetapetaESP"
     espGui.ResetOnSpawn = false
     espGui.IgnoreGuiInset = true
-    espGui.Parent = CoreGui
+    espGui.DisplayOrder = -100
+    espGui.Parent = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") or CoreGui
 
     local function findAncestorNamed(object, name)
         local current = object
@@ -399,6 +296,7 @@ local initialized, initError = pcall(function()
         mapDoors[object] = nil
         mapTouches[object] = nil
         mapSafes[object] = nil
+        mapPapers[object] = nil
         mapHides[object] = nil
         safePrompts[object] = nil
         local connection = safePromptConnections[object]
@@ -413,12 +311,16 @@ local initialized, initError = pcall(function()
             mapDoors[object] = true
         elseif object:IsA("Model") and object.Name == "Safe" then
             mapSafes[object] = true
+        elseif (object:IsA("Model") or object:IsA("BasePart")) and object.Name == "HintPaper" then
+            mapPapers[object] = true
         elseif object:IsA("Model") and object.Name == "HideTansu" then
             mapHides[object] = true
         elseif object:IsA("BasePart") and (object.Name == "EventArea" or object.Name == "closePart") then
             mapTouches[object] = true
-        elseif object:IsA("ProximityPrompt") and findAncestorNamed(object, "PaintingGimmickFailure") then
-            safePrompts[object] = true
+        elseif object:IsA("ProximityPrompt") and findAncestorNamed(object, "Safe") then
+            if object.Name == "focus" and object.Parent and object.Parent.Name == "InteractPoint" and object.Parent.Parent and object.Parent.Parent.Name == "Safe" then
+                safePrompts[object] = true
+            end
             local function enable()
                 guarded(function()
                     if alive and object.Parent and not object.Enabled then
@@ -443,6 +345,7 @@ local initialized, initError = pcall(function()
         table.clear(mapDoors)
         table.clear(mapTouches)
         table.clear(mapSafes)
+        table.clear(mapPapers)
         table.clear(mapHides)
         table.clear(safePrompts)
         mapFolder = folder
@@ -470,25 +373,15 @@ local initialized, initError = pcall(function()
         local server = Workspace:FindFirstChild("Server")
         local generated = server and server:FindFirstChild("MapGenerated")
         bindMap(generated and generated:FindFirstChild("Rooms"))
-    end
-
-    local function trackEnemy(object)
-        if object:IsA("Model") and object.Name == "ModelEnemy" then
-            enemies[object] = true
+        local client = Workspace:FindFirstChild("Client")
+        local enemyFolder = client and client:FindFirstChild("Enemy")
+        local clientEnemy = enemyFolder and enemyFolder:FindFirstChild("ClientEnemy")
+        local enemy = clientEnemy and clientEnemy:FindFirstChild("EnemyModel")
+        table.clear(enemies)
+        if enemy and enemy:IsA("Model") then
+            enemies[enemy] = true
         end
     end
-
-    for _, object in ipairs(Workspace:GetDescendants()) do
-        trackEnemy(object)
-    end
-    table.insert(featureConnections, Workspace.DescendantAdded:Connect(function(object)
-        guarded(function()
-            trackEnemy(object)
-        end)
-    end))
-    table.insert(featureConnections, Workspace.DescendantRemoving:Connect(function(object)
-        enemies[object] = nil
-    end))
 
     local function promptPosition(prompt)
         local holder = prompt.Parent
@@ -697,9 +590,6 @@ local initialized, initError = pcall(function()
         for safe in pairs(mapSafes) do
             if safe.Parent then all[safe] = true end
         end
-        for _, entry in pairs(rooms) do
-            if entry.safe and entry.safe.Parent then all[entry.safe] = true end
-        end
         local readable = {}
         for safe in pairs(all) do
             local door = safe:FindFirstChild("Door")
@@ -709,6 +599,26 @@ local initialized, initError = pcall(function()
             end
         end
         return nearest(readable, root) or nearest(all, root)
+    end
+
+    local function hintLabel(paper)
+        local gui = paper and (paper:FindFirstChild("SurfaceGui") or paper:FindFirstChildWhichIsA("SurfaceGui", true))
+        local label = gui and (gui:FindFirstChild("TextLabel") or gui:FindFirstChildWhichIsA("TextLabel", true))
+        if label and label:IsA("TextLabel") then
+            return label
+        end
+        return nil
+    end
+
+    local function closestHint(root)
+        local available = {}
+        for paper in pairs(mapPapers) do
+            local label = hintLabel(paper)
+            if paper.Parent and label and label.Text ~= "" then
+                available[paper] = true
+            end
+        end
+        return nearest(available, root)
     end
 
     local function safeIsOpen(safe)
@@ -735,9 +645,10 @@ local initialized, initError = pcall(function()
             circles[i] = getCircleFrames(safe, i) or {}
         end
         local hints = {}
-        for _, entry in pairs(rooms) do
-            if entry.hint and entry.hint.Parent then
-                table.insert(hints, { path = entry.hint:GetFullName(), text = entry.hint.Text })
+        for paper in pairs(mapPapers) do
+            local label = hintLabel(paper)
+            if paper.Parent and label then
+                table.insert(hints, { path = label:GetFullName(), text = label.Text })
             end
         end
         return HttpService:JSONEncode({ safePath = safe:GetFullName(), circles = circles, hints = hints })
@@ -770,49 +681,69 @@ local initialized, initError = pcall(function()
             if type(fireproximityprompt) ~= "function" then
                 error("Executor không hỗ trợ fireproximityprompt.")
             end
-            local counts = {}
-            for i = 1, 3 do
-                local frames = getCircleFrames(safe, i)
-                if not frames or #frames == 0 then
-                    error("Không đọc được Frame ở Circle" .. i .. ". Hãy xuất dữ liệu Safe.")
-                end
-                counts[i] = math.min(#frames, 20)
+            local _, root = characterRoot()
+            local paper = closestHint(root)
+            local label = paper and hintLabel(paper)
+            if not label or label.Text == "" then
+                error("Chưa tìm thấy Hint Paper tầng hiện tại.")
             end
-            fireproximityprompt(prompt)
-            task.wait(0.3)
-            local tries = 0
-            for a = 1, counts[1] do
-                for b = 1, counts[2] do
-                    for c = 1, counts[3] do
-                        if not alive or not safeAura or generation ~= safeGeneration or not safe.Parent or not prompt.Parent then
-                            return
-                        end
-                        local player = Players.LocalPlayer
-                        local character = player and player.Character
-                        local root = character and character:FindFirstChild("HumanoidRootPart")
-                        local pos = promptPosition(prompt)
-                        if not root or not pos or (root.Position - pos).Magnitude > prompt.MaxActivationDistance then
-                            error("Đã rời khỏi tầm của prompt Safe.")
-                        end
-                        if safeIsOpen(safe) then
-                            notify("Safe đã được báo mở.")
-                            return
-                        end
-                        event:FireServer({ a, b, c })
-                        tries = tries + 1
-                        task.wait(0.1)
+            local symbols = { "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ" }
+            local numbers = {}
+            for index, symbol in ipairs(symbols) do
+                numbers[symbol] = index
+            end
+            local target = {}
+            local chars = {}
+            for _, codepoint in utf8.codes(label.Text) do
+                local symbol = utf8.char(codepoint)
+                if numbers[symbol] then
+                    table.insert(chars, symbol)
+                    table.insert(target, numbers[symbol])
+                elseif not symbol:match("^%s$") then
+                    error("Hint Paper có ký tự chưa biết: " .. symbol)
+                end
+            end
+            if #target ~= 3 then
+                error("Hint Paper phải có đúng 3 ký tự.")
+            end
+            for index = 1, 3 do
+                local frames = getCircleFrames(safe, index)
+                local found = false
+                for _, frame in ipairs(frames or {}) do
+                    for _, text in ipairs(frame.labels) do
+                        if text == chars[index] then found = true end
                     end
                 end
+                if not found then
+                    error("Không thấy ký tự " .. chars[index] .. " ở Circle" .. index .. ".")
+                end
+            end
+            if not alive or not safeAura or generation ~= safeGeneration or not safe.Parent or not prompt.Parent then
+                return
+            end
+            local position = promptPosition(prompt)
+            if not position or (position - root.Position).Magnitude > prompt.MaxActivationDistance then
+                error("Đã rời khỏi tầm Safe.InteractPoint.focus.")
             end
             if safeIsOpen(safe) then
                 notify("Safe đã được báo mở.")
+                return
+            end
+            fireproximityprompt(prompt)
+            task.wait(0.3)
+            if not alive or not safeAura or generation ~= safeGeneration or not safe.Parent then return end
+            event:FireServer(target)
+            safeAttempted[safe] = true
+            task.wait(0.3)
+            if safeIsOpen(safe) then
+                notify("Safe đã được báo mở.")
             else
-                notify("Đã thử " .. tries .. " tổ hợp nhưng chưa xác nhận Safe mở. Remote có thể chỉ cập nhật màu.", 12)
+                notify("Đã gửi mã " .. table.concat(target, ", ") .. ". Chưa xác nhận Safe mở; remote có thể chỉ cập nhật màu Memo.", 12)
             end
         end)
         safeJob = false
         if not ok then
-            notify("Safe Aura: " .. tostring(err), 8)
+            safeNote("Safe Aura: " .. tostring(err))
         end
     end
 
@@ -875,9 +806,14 @@ local initialized, initError = pcall(function()
         if espEnabled.Items then
             for key in pairs(keys) do wanted[key] = { "Items", "Key", Color3.fromRGB(0, 255, 100) } end
             for box in pairs(boxes) do wanted[box] = { "Items", box.Name, Color3.fromRGB(0, 255, 100) } end
-            for _, entry in pairs(rooms) do
-                if entry.paper then wanted[entry.paper] = { "Items", "Hint Paper", Color3.fromRGB(0, 255, 100) } end
-                if entry.safe then wanted[entry.safe] = { "Items", "Safe", Color3.fromRGB(0, 255, 100) } end
+            for paper in pairs(mapPapers) do
+                wanted[paper] = { "Items", "Hint Paper", Color3.fromRGB(0, 255, 100) }
+            end
+            for safe in pairs(mapSafes) do
+                local door = safe:FindFirstChild("Door")
+                if door and (door:IsA("Model") or door:IsA("BasePart")) then
+                    wanted[door] = { "Items", "Safe", Color3.fromRGB(0, 255, 100) }
+                end
             end
         end
         if espEnabled.Enemy then
@@ -903,9 +839,18 @@ local initialized, initError = pcall(function()
         local player = Players.LocalPlayer
         local character = player and player.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
-        if not camera then return end
+        if not camera or not root then
+            for _, entry in pairs(espEntries) do
+                entry.line.Visible = false
+                entry.billboard.Enabled = false
+                entry.highlight.Enabled = false
+            end
+            return
+        end
         for object, entry in pairs(espEntries) do
             if object.Parent and entry.part.Parent then
+                entry.billboard.Enabled = true
+                entry.highlight.Enabled = true
                 local pos = entry.part.Position
                 local distance = root and math.floor((pos - root.Position).Magnitude + 0.5) or 0
                 entry.text.Text = entry.title .. "\n" .. distance .. " studs"
@@ -985,7 +930,7 @@ local initialized, initError = pcall(function()
             safeGeneration = safeGeneration + 1
             if value then
                 table.clear(safeAttempted)
-                notify("Safe Aura thử tổ hợp với MemoTextColorUpdateEvent; chưa đảm bảo mở được Safe.", 10)
+                notify("Safe Aura đọc Hint Paper và gửi mã một lần; chưa xác nhận remote mở Safe.", 10)
             end
         end)
     })
@@ -1012,12 +957,15 @@ local initialized, initError = pcall(function()
         espEnabled.Items = value
         if value then
             refreshPaths()
-            if not next(keys) and not next(boxes) and not next(rooms) then notify("Chưa tìm thấy items; ESP sẽ tiếp tục chờ.") end
+            if not next(keys) and not next(boxes) and not next(mapPapers) and not next(mapSafes) then notify("Chưa tìm thấy items; ESP sẽ tiếp tục chờ.") end
         end
     end) })
     EspSection:AddToggle("EspEnemy", { Title = "ESP Petapeta", Default = false, Callback = runCallback(function(value)
         espEnabled.Enemy = value
-        if value and not next(enemies) then notify("Chưa tìm thấy ModelEnemy; ESP sẽ tiếp tục chờ.") end
+        if value then
+            refreshPaths()
+            if not next(enemies) then notify("Chưa tìm thấy ClientEnemy.EnemyModel; ESP sẽ tiếp tục chờ.") end
+        end
     end) })
     EspSection:AddToggle("EspHide", { Title = "ESP Tủ Trốn", Default = false, Callback = runCallback(function(value)
         espEnabled.Hide = value
@@ -1073,16 +1021,15 @@ local initialized, initError = pcall(function()
                             end
                         end
                         if not prompt then
-                            safeNote("Chưa tìm thấy prompt PaintingGimmickFailure; cần tìm Hint Paper trước.")
+                            safeNote("Chưa tìm thấy Safe.InteractPoint.focus; hãy tìm Hint Paper trước.")
                         else
                             local position = promptPosition(prompt)
-                            local safe = closestSafe(root)
+                            local safe = prompt.Parent and prompt.Parent.Parent
                             if not safe then
                                 safeNote("Chưa tìm thấy Safe trong các Room đã tải.")
                             elseif safeIsOpen(safe) then
                                 safeNote("Safe gần nhất đã mở.")
                             elseif position and (position - root.Position).Magnitude <= prompt.MaxActivationDistance and not safeAttempted[safe] then
-                                safeAttempted[safe] = true
                                 local generation = safeGeneration
                                 task.spawn(function() runSafeJob(safe, prompt, generation) end)
                             end
@@ -1101,17 +1048,18 @@ local initialized, initError = pcall(function()
         Callback = runCallback(function()
             refreshPaths()
             local _, root = characterRoot()
-            local safes = {}
-            for _, entry in pairs(rooms) do
-                if entry.safe and entry.safe.Parent then
-                    safes[entry.safe] = true
+            local doors = {}
+            for safe in pairs(mapSafes) do
+                local door = safe:FindFirstChild("Door")
+                if door and door.Parent then
+                    doors[door] = true
                 end
             end
-            local safe = nearest(safes, root)
-            if not safe then
-                error("Không tìm thấy Safe trong các Room đã tải.")
+            local door = nearest(doors, root)
+            if not door then
+                error("Không tìm thấy Safe.Door trong Server.MapGenerated.Rooms.")
             end
-            teleportTo(safe)
+            teleportTo(door)
         end)
     })
 
@@ -1152,15 +1100,9 @@ local initialized, initError = pcall(function()
         Callback = runCallback(function()
             refreshPaths()
             local _, root = characterRoot()
-            local papers = {}
-            for _, entry in pairs(rooms) do
-                if entry.paper and entry.paper.Parent then
-                    papers[entry.paper] = true
-                end
-            end
-            local paper = nearest(papers, root)
+            local paper = nearest(mapPapers, root)
             if not paper then
-                error("Không tìm thấy HintPaper trong các Room đã tải.")
+                error("Không tìm thấy HintPaper trong Server.MapGenerated.Rooms.")
             end
             teleportTo(paper)
         end)
@@ -1206,22 +1148,9 @@ local initialized, initError = pcall(function()
         Title = "Show Hint Paper",
         Callback = runCallback(function()
             refreshPaths()
-            local labels = {}
-            local papers = {}
-            for _, entry in pairs(rooms) do
-                if entry.hint and entry.hint.Parent and entry.paper and entry.paper.Parent then
-                    labels[entry.paper] = entry.hint
-                    papers[entry.paper] = true
-                end
-            end
-            local player = Players.LocalPlayer
-            local character = player and player.Character
-            local root = character and character:FindFirstChild("HumanoidRootPart")
-            local paper = root and nearest(papers, root) or nil
-            if not paper then
-                paper = next(papers)
-            end
-            local label = paper and labels[paper]
+            local _, root = characterRoot()
+            local paper = closestHint(root)
+            local label = paper and hintLabel(paper)
             if not label then
                 error("Không tìm thấy HintPaper hoặc TextLabel trong các Room đã tải.")
             end
@@ -1302,11 +1231,7 @@ local initialized, initError = pcall(function()
                 destroyEsp(object)
             end
             pcall(function() espGui:Destroy() end)
-            disconnectAll(roomFolderConnections)
             disconnectAll(itemFolderConnections)
-            for room in pairs(rooms) do
-                removeRoom(room)
-            end
             for key in pairs(keys) do
                 removeKey(key)
             end
@@ -1365,7 +1290,10 @@ local initialized, initError = pcall(function()
         while alive do
             if autoCollectKey then
                 guarded(function()
-                    local _, root = characterRoot()
+                    local player = Players.LocalPlayer
+                    local character = player and player.Character
+                    local root = character and character:FindFirstChild("HumanoidRootPart")
+                    if not root then return end
                     for _, entry in pairs(keys) do
                         local prompt = entry.prompt
                         if prompt and prompt.Parent then
