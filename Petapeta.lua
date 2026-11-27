@@ -65,14 +65,13 @@ local initialized, initError = pcall(function()
     local autoCollectKey = false
     local lastBackgroundError = 0
     local lightingOriginal = {}
-    local atmosphereOriginal = {}
     local lightingTargets = {
         Ambient = Color3.fromRGB(255, 255, 255),
         OutdoorAmbient = Color3.fromRGB(255, 255, 255),
         Brightness = 2,
         GlobalShadows = false,
         FogStart = 0,
-        FogEnd = 1000000,
+        FogEnd = 100000,
         ClockTime = 0
     }
 
@@ -571,15 +570,6 @@ local initialized, initError = pcall(function()
                     Lighting[property] = value
                 end)
             end
-            for atmosphere, values in pairs(atmosphereOriginal) do
-                pcall(function()
-                    if atmosphere.Parent then
-                        atmosphere.Density = values.Density
-                        atmosphere.Haze = values.Haze
-                        atmosphere.Glare = values.Glare
-                    end
-                end)
-            end
             pcall(function()
                 logoGui:Destroy()
             end)
@@ -605,25 +595,10 @@ local initialized, initError = pcall(function()
                         end
                     end)
                 end
-                for _, atmosphere in ipairs(Lighting:GetChildren()) do
+                for _, atmosphere in ipairs(Lighting:GetDescendants()) do
                     if atmosphere:IsA("Atmosphere") then
                         guarded(function()
-                            if not atmosphereOriginal[atmosphere] then
-                                atmosphereOriginal[atmosphere] = {
-                                    Density = atmosphere.Density,
-                                    Haze = atmosphere.Haze,
-                                    Glare = atmosphere.Glare
-                                }
-                            end
-                            if atmosphere.Density ~= 0 then
-                                atmosphere.Density = 0
-                            end
-                            if atmosphere.Haze ~= 0 then
-                                atmosphere.Haze = 0
-                            end
-                            if atmosphere.Glare ~= 0 then
-                                atmosphere.Glare = 0
-                            end
+                            atmosphere:Destroy()
                         end)
                     end
                 end
