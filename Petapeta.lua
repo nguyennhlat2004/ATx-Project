@@ -401,7 +401,7 @@ local initialized, initError = pcall(function()
         end)
     })
 
-    local Aura = Main:AddSection("Aura")
+    local Aura = Main:AddSection("Collect Aura")
     local autoKeyToggle
     autoKeyToggle = Aura:AddToggle("AutoCollectKey", {
         Title = "Auto Collect Key",
