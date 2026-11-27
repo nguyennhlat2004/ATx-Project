@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local StarterGui = game:GetService("StarterGui")
 local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 
 local function fallbackNotify(content)
     pcall(function()
@@ -63,6 +64,17 @@ local initialized, initError = pcall(function()
     local originalHolds = {}
     local autoCollectKey = false
     local lastBackgroundError = 0
+    local lightingOriginal = {}
+    local atmosphereOriginal = {}
+    local lightingTargets = {
+        Ambient = Color3.fromRGB(255, 255, 255),
+        OutdoorAmbient = Color3.fromRGB(255, 255, 255),
+        Brightness = 2,
+        GlobalShadows = false,
+        FogStart = 0,
+        FogEnd = 1000000,
+        ClockTime = 0
+    }
 
     local function disconnectAll(connections)
         for _, connection in ipairs(connections) do
@@ -401,6 +413,25 @@ local initialized, initError = pcall(function()
         end)
     })
 
+    Teleport:AddButton({
+        Title = "Teleport To Hint Paper",
+        Callback = runCallback(function()
+            refreshPaths()
+            local _, root = characterRoot()
+            local papers = {}
+            for _, entry in pairs(rooms) do
+                if entry.paper and entry.paper.Parent then
+                    papers[entry.paper] = true
+                end
+            end
+            local paper = nearest(papers, root)
+            if not paper then
+                error("Không tìm thấy HintPaper trong các Room đã tải.")
+            end
+            teleportTo(paper)
+        end)
+    })
+
     local Aura = Main:AddSection("Collect Aura")
     local autoKeyToggle
     autoKeyToggle = Aura:AddToggle("AutoCollectKey", {
@@ -535,6 +566,20 @@ local initialized, initError = pcall(function()
                 restoreHold(prompt)
             end
             table.clear(boxes)
+            for property, value in pairs(lightingOriginal) do
+                pcall(function()
+                    Lighting[property] = value
+                end)
+            end
+            for atmosphere, values in pairs(atmosphereOriginal) do
+                pcall(function()
+                    if atmosphere.Parent then
+                        atmosphere.Density = values.Density
+                        atmosphere.Haze = values.Haze
+                        atmosphere.Glare = values.Glare
+                    end
+                end)
+            end
             pcall(function()
                 logoGui:Destroy()
             end)
@@ -547,6 +592,45 @@ local initialized, initError = pcall(function()
     Window:SelectTab(1)
     Window:Minimize()
     guarded(refreshPaths)
+    task.spawn(function()
+        while alive do
+            guarded(function()
+                for property, value in pairs(lightingTargets) do
+                    guarded(function()
+                        if lightingOriginal[property] == nil then
+                            lightingOriginal[property] = Lighting[property]
+                        end
+                        if Lighting[property] ~= value then
+                            Lighting[property] = value
+                        end
+                    end)
+                end
+                for _, atmosphere in ipairs(Lighting:GetChildren()) do
+                    if atmosphere:IsA("Atmosphere") then
+                        guarded(function()
+                            if not atmosphereOriginal[atmosphere] then
+                                atmosphereOriginal[atmosphere] = {
+                                    Density = atmosphere.Density,
+                                    Haze = atmosphere.Haze,
+                                    Glare = atmosphere.Glare
+                                }
+                            end
+                            if atmosphere.Density ~= 0 then
+                                atmosphere.Density = 0
+                            end
+                            if atmosphere.Haze ~= 0 then
+                                atmosphere.Haze = 0
+                            end
+                            if atmosphere.Glare ~= 0 then
+                                atmosphere.Glare = 0
+                            end
+                        end)
+                    end
+                end
+            end)
+            task.wait(0.5)
+        end
+    end)
     task.spawn(function()
         while alive do
             guarded(refreshPaths)
