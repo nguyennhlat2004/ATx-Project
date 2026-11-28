@@ -691,6 +691,336 @@ local initialized, initError = pcall(function()
         notify("Đã xuất dữ liệu Safe" .. (saved and " vào Petapeta_Safe_Diagnostic.json" or "") .. (copied and " và clipboard" or "") .. ". Hãy gửi dữ liệu cho mình.", 12)
     end
 
+    local diagnosticEvents = {}
+    local diagnosticSnapshots = {}
+    local diagnosticActive = false
+    local diagnosticDecompile = false
+    local diagnosticHook
+    local diagnosticStatus = "not started"
+
+    local function diagnosticValue(value, depth, privateArguments)
+        local kind = typeof(value)
+        if kind == "nil" then return "nil" end
+        if kind == "boolean" or kind == "number" then
+            if kind == "number" and (value ~= value or value == math.huge or value == -math.huge) then return tostring(value) end
+            return value
+        end
+        if kind == "string" then
+            local lower = value:lower()
+            if privateArguments then
+                local allowed = value == "" or value:match("^%d+$") or lower == "open" or lower == "close" or lower == "left" or lower == "right"
+                if not allowed and #value <= 24 then
+                    local ok, isKatakana = pcall(function()
+                        local count = 0
+                        for _, codepoint in utf8.codes(value) do
+                            count = count + 1
+                            if codepoint < 0x30A0 or codepoint > 0x30FF then return false end
+                        end
+                        return count > 0 and count <= 6
+                    end)
+                    allowed = ok and isKatakana
+                end
+                if not allowed then return "[redacted]" end
+            end
+            if #value > 60 or lower:find("token", 1, true) or lower:find("password", 1, true) or lower:find("cookie", 1, true) or lower:find("github_pat", 1, true) then
+                return "[redacted]"
+            end
+            return value
+        end
+        if kind == "Instance" then
+            local ok, name = pcall(function() return value:GetFullName() end)
+            return { class = value.ClassName, path = ok and name or value.Name }
+        end
+        if kind == "table" then
+            if depth >= 3 then return "[depth limit]" end
+            local result = {}
+            local count = 0
+            for key, item in pairs(value) do
+                count = count + 1
+                if count > 30 then
+                    result.truncated = true
+                    break
+                end
+                if type(key) == "number" and key >= 1 and key <= 100 and key % 1 == 0 then
+                    result[tostring(key)] = diagnosticValue(item, depth + 1, privateArguments)
+                elseif type(key) == "string" and (key == "index" or key == "value" or key == "code" or key == "rotation" or key == "circle" or key == "position") then
+                    result[key] = diagnosticValue(item, depth + 1, privateArguments)
+                end
+            end
+            return result
+        end
+        return tostring(value)
+    end
+
+    local function diagnosticProperty(object, name, output)
+        local ok, value = pcall(function() return object[name] end)
+        if ok then output[name] = diagnosticValue(value, 0) end
+    end
+
+    local function diagnosticNode(object, parentId, id)
+        local node = { id = id, parent = parentId, name = object.Name, class = object.ClassName, properties = {}, attributes = {} }
+        local attrsOk, attributes = pcall(function() return object:GetAttributes() end)
+        if attrsOk then
+            for name, value in pairs(attributes) do
+                local lower = name:lower()
+                if lower:find("token", 1, true) or lower:find("password", 1, true) or lower:find("cookie", 1, true) or lower:find("secret", 1, true) then
+                    node.attributes[name] = "[redacted]"
+                else
+                    node.attributes[name] = diagnosticValue(value, 0)
+                end
+            end
+        end
+        local properties = {}
+        if object:IsA("BasePart") then
+            properties = { "CFrame", "Size", "Transparency", "CanCollide", "Anchored", "CanTouch" }
+        elseif object:IsA("Attachment") then
+            properties = { "CFrame", "WorldCFrame" }
+        elseif object:IsA("ProximityPrompt") then
+            properties = { "Enabled", "ActionText", "ObjectText", "HoldDuration", "MaxActivationDistance", "RequiresLineOfSight", "KeyboardKeyCode", "Style" }
+        elseif object:IsA("GuiObject") then
+            properties = { "Visible", "Position", "Size", "AnchorPoint", "Rotation", "LayoutOrder", "AbsolutePosition", "AbsoluteSize", "ZIndex" }
+            if object:IsA("TextLabel") or object:IsA("TextButton") then
+                table.insert(properties, "Text")
+                table.insert(properties, "TextColor3")
+            end
+        elseif object:IsA("SurfaceGui") then
+            properties = { "Enabled", "Face", "AlwaysOnTop", "CanvasSize", "Adornee" }
+        elseif object:IsA("ValueBase") then
+            properties = { "Value" }
+        elseif object:IsA("Model") then
+            properties = { "WorldPivot", "PrimaryPart" }
+        elseif object:IsA("LuaSourceContainer") then
+            properties = { "Disabled", "RunContext" }
+        end
+        for _, name in ipairs(properties) do
+            diagnosticProperty(object, name, node.properties)
+        end
+        return node
+    end
+
+    local function diagnosticTree(root, limit)
+        local nodes = {}
+        local queue = { { object = root, parent = 0 } }
+        local index = 1
+        while index <= #queue and #nodes < limit do
+            local item = queue[index]
+            index = index + 1
+            local id = #nodes + 1
+            local ok, node = pcall(diagnosticNode, item.object, item.parent, id)
+            if ok then
+                table.insert(nodes, node)
+                local childrenOk, children = pcall(function() return item.object:GetChildren() end)
+                if childrenOk then
+                    for _, child in ipairs(children) do
+                        table.insert(queue, { object = child, parent = id })
+                    end
+                end
+            end
+        end
+        return { nodes = nodes, truncated = index <= #queue, limit = limit }
+    end
+
+    local function diagnosticSafe()
+        local player = Players.LocalPlayer
+        local character = player and player.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        return root and closestSafe(root) or nil
+    end
+
+    local function diagnosticSnapshot(label)
+        refreshPaths()
+        local safe = diagnosticSafe()
+        if not safe then error("Không tìm thấy Safe. Hãy đến gần Safe và thử lại.") end
+        local hints = {}
+        for paper in pairs(mapPapers) do
+            if paper.Parent then
+                local text = hintLabel(paper)
+                table.insert(hints, { path = paper:GetFullName(), text = text and text.Text or "", position = tostring(findPosition(paper)) })
+                if #hints >= 30 then break end
+            end
+        end
+        local ui = {}
+        local playerGui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if playerGui then
+            local seen = {}
+            for _, object in ipairs(playerGui:GetDescendants()) do
+                local lower = object.Name:lower()
+                if (lower:find("safe", 1, true) or lower:find("dial", 1, true) or lower:match("^lock")) and not seen[object] then
+                    local ancestor = object.Parent
+                    local nested = false
+                    while ancestor and ancestor ~= playerGui do
+                        if seen[ancestor] then nested = true break end
+                        ancestor = ancestor.Parent
+                    end
+                    if not nested then
+                        seen[object] = true
+                        table.insert(ui, { path = object:GetFullName(), tree = diagnosticTree(object, 400) })
+                        if #ui >= 5 then break end
+                    end
+                end
+            end
+        end
+        return { phase = label, time = os.time(), safePath = safe:GetFullName(), tree = diagnosticTree(safe, 2000), hints = hints, ui = ui }
+    end
+
+    local function installDiagnosticHook()
+        if not env or type(hookmetamethod) ~= "function" or type(getnamecallmethod) ~= "function" or type(newcclosure) ~= "function" then
+            return nil, "Executor thiếu hookmetamethod, getnamecallmethod, newcclosure hoặc getgenv."
+        end
+        local existing = env.PetapetaSafeDiagnosticHook
+        if type(existing) == "table" and existing.installed then return existing end
+        local state = { installed = false, busy = false, handler = nil }
+        local original
+        local ok = pcall(function()
+            original = hookmetamethod(game, "__namecall", newcclosure(function(object, ...)
+                if not state.busy and state.handler then
+                    local method = getnamecallmethod()
+                    if method == "FireServer" or method == "InvokeServer" then
+                        local allowed = true
+                        if type(checkcaller) == "function" then
+                            local checked, result = pcall(checkcaller)
+                            if checked and result then allowed = false end
+                        end
+                        if allowed then
+                            state.busy = true
+                            pcall(state.handler, object, method, ...)
+                            state.busy = false
+                        end
+                    end
+                end
+                return original(object, ...)
+            end))
+        end)
+        if not ok or type(original) ~= "function" then
+            return nil, "Không cài được hook ghi remote."
+        end
+        state.installed = true
+        env.PetapetaSafeDiagnosticHook = state
+        return state
+    end
+
+    local function onDiagnosticRemote(object, method, ...)
+        if not diagnosticActive or #diagnosticEvents >= 250 or typeof(object) ~= "Instance" then return end
+        if not object:IsA("RemoteEvent") and not object:IsA("RemoteFunction") then return end
+        local count = select("#", ...)
+        local args = {}
+        for i = 1, math.min(count, 8) do
+            args[i] = diagnosticValue(select(i, ...), 0, true)
+        end
+        table.insert(diagnosticEvents, { time = os.clock(), path = object:GetFullName(), class = object.ClassName, method = method, argumentCount = count, arguments = args })
+    end
+
+    local function startSafeCapture()
+        diagnosticActive = false
+        table.clear(diagnosticEvents)
+        table.clear(diagnosticSnapshots)
+        table.insert(diagnosticSnapshots, diagnosticSnapshot("before"))
+        local state, failure = installDiagnosticHook()
+        if state then
+            diagnosticHook = state
+            diagnosticActive = true
+            state.handler = onDiagnosticRemote
+            diagnosticStatus = "recording"
+            notify("Đang ghi Safe. Hãy mở khóa, xoay các vòng và bấm Mở; sau đó bấm Stop Safe Capture.", 12)
+        else
+            diagnosticStatus = failure
+            notify("Đã chụp trạng thái Safe nhưng không ghi được remote: " .. failure, 12)
+        end
+    end
+
+    local function stopSafeCapture()
+        diagnosticActive = false
+        if diagnosticHook and diagnosticHook.handler == onDiagnosticRemote then diagnosticHook.handler = nil end
+        diagnosticStatus = "stopped"
+        table.insert(diagnosticSnapshots, diagnosticSnapshot("after"))
+        notify("Đã lưu " .. #diagnosticEvents .. " remote liên quan và trạng thái sau. Hãy xuất hoặc upload log.", 10)
+    end
+
+    local function diagnosticScripts(safe)
+        local result = { enabled = diagnosticDecompile, records = {}, limit = 10 }
+        if not diagnosticDecompile then return result end
+        local decompiler = decompile or (env and env.decompile)
+        if type(decompiler) ~= "function" then
+            result.error = "Executor không có hàm decompile. Dex có thể cung cấp hàm này nếu được bật."
+            return result
+        end
+        local candidates = {}
+        local seen = {}
+        local function consider(object, insideSafe)
+            if seen[object] or not object:IsA("LuaSourceContainer") then return end
+            local viable = object:IsA("LocalScript") or object:IsA("ModuleScript")
+            if object:IsA("Script") then
+                local ok, context = pcall(function() return object.RunContext end)
+                viable = ok and context == Enum.RunContext.Client
+            end
+            if not viable then return end
+            local name = object.Name:lower()
+            if insideSafe or name:find("safe", 1, true) or name:find("lock", 1, true) or name:find("memo", 1, true) or name:find("focus", 1, true) or name:find("gimmick", 1, true) then
+                seen[object] = true
+                table.insert(candidates, object)
+            end
+        end
+        if safe then
+            for _, object in ipairs(safe:GetDescendants()) do consider(object, true) end
+        end
+        local player = Players.LocalPlayer
+        local sources = { ReplicatedStorage }
+        local scripts = player and player:FindFirstChild("PlayerScripts")
+        local gui = player and player:FindFirstChildOfClass("PlayerGui")
+        if scripts then table.insert(sources, scripts) end
+        if gui then table.insert(sources, gui) end
+        for _, source in ipairs(sources) do
+            for _, object in ipairs(source:GetDescendants()) do consider(object, false) end
+        end
+        result.candidateCount = #candidates
+        for i = 1, math.min(#candidates, 10) do
+            local object = candidates[i]
+            local record = { path = object:GetFullName(), class = object.ClassName, status = "pending" }
+            local finished = false
+            local success, source
+            task.spawn(function()
+                success, source = pcall(decompiler, object)
+                finished = true
+            end)
+            local deadline = os.clock() + 5
+            while not finished and os.clock() < deadline do task.wait(0.1) end
+            if not finished then
+                record.status = "timeout"
+            elseif not success or type(source) ~= "string" then
+                record.status = "failed"
+            else
+                record.status = "ok"
+                record.source = source:sub(1, 50000)
+                record.truncated = #source > 50000
+            end
+            table.insert(result.records, record)
+        end
+        return result
+    end
+
+    local oldMakeSafeData = makeSafeData
+    makeSafeData = function()
+        local snapshot = diagnosticSnapshot("export")
+        local safe = diagnosticSafe()
+        local basicOk, basic = pcall(oldMakeSafeData)
+        local parsed = nil
+        if basicOk then
+            local ok, value = pcall(function() return HttpService:JSONDecode(basic) end)
+            if ok then parsed = value end
+        end
+        return HttpService:JSONEncode({
+            version = 2,
+            captureStatus = diagnosticStatus,
+            remoteFilter = "all outgoing remotes during capture; string arguments redacted except simple safe values",
+            basic = parsed,
+            snapshots = diagnosticSnapshots,
+            current = snapshot,
+            remotes = diagnosticEvents,
+            remoteLimit = 250,
+            scripts = diagnosticScripts(safe)
+        })
+    end
+
     local function runSafeJob(safe, prompt, generation)
         if safeJob then return end
         safeJob = true
@@ -957,6 +1287,18 @@ local initialized, initError = pcall(function()
             if value then
                 table.clear(safeAttempted)
                 notify("Safe Aura đọc Hint Paper và gửi mã một lần; chưa xác nhận remote mở Safe.", 10)
+            end
+        end)
+    })
+    SafeSection:AddButton({ Title = "Start Safe Capture", Callback = runCallback(startSafeCapture) })
+    SafeSection:AddButton({ Title = "Stop Safe Capture", Callback = runCallback(stopSafeCapture) })
+    SafeSection:AddToggle("SafeDiagnosticDecompile", {
+        Title = "Include Decompiled Scripts",
+        Default = false,
+        Callback = runCallback(function(value)
+            diagnosticDecompile = value
+            if value then
+                notify("Cảnh báo: decompiler có thể gửi bytecode tới bên thứ ba. Source sẽ nằm trong log công khai khi upload.", 15)
             end
         end)
     })
@@ -1286,6 +1628,8 @@ local initialized, initError = pcall(function()
     if env then
         env.PetapetaCleanup = function()
             alive = false
+            diagnosticActive = false
+            if diagnosticHook and diagnosticHook.handler == onDiagnosticRemote then diagnosticHook.handler = nil end
             safeAura = false
             safeGeneration = safeGeneration + 1
             flySerial = flySerial + 1
