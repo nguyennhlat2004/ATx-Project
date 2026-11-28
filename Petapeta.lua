@@ -58,6 +58,14 @@ local initialized, initError = pcall(function()
     local itemFolderConnections = {}
     local boxes = {}
     local keys = {}
+    local dolls = {}
+    local dollNames = {
+        DollBlue = "Doll Blue",
+        DollRed = "Doll Red",
+        DollWhite = "Doll White",
+        DollYellow = "Doll Yellow",
+        DollBlackHead = "Doll Black Head"
+    }
     local originalHolds = {}
     local autoCollectKey = false
     local lastBackgroundError = 0
@@ -99,6 +107,9 @@ local initialized, initError = pcall(function()
         end
         if object:IsA("Model") then
             return object:GetPivot()
+        end
+        if object:IsA("Attachment") then
+            return object.WorldCFrame
         end
         local part = object:FindFirstChildWhichIsA("BasePart", true)
         return part and part.CFrame or nil
@@ -202,6 +213,9 @@ local initialized, initError = pcall(function()
     local function addItem(item)
         addBox(item)
         addKey(item)
+        if dollNames[item.Name] and (item:IsA("Model") or item:IsA("BasePart")) then
+            dolls[item] = dollNames[item.Name]
+        end
     end
 
     local function bindItems(folder)
@@ -210,6 +224,7 @@ local initialized, initError = pcall(function()
         end
         disconnectAll(itemFolderConnections)
         table.clear(boxes)
+        table.clear(dolls)
         for key in pairs(keys) do
             removeKey(key)
         end
@@ -228,6 +243,7 @@ local initialized, initError = pcall(function()
         table.insert(itemFolderConnections, folder.ChildRemoved:Connect(function(item)
             guarded(function()
                 boxes[item] = nil
+                dolls[item] = nil
                 removeKey(item)
             end)
         end))
@@ -257,12 +273,13 @@ local initialized, initError = pcall(function()
     local mapTouches = {}
     local mapSafes = {}
     local mapPapers = {}
+    local dollRoomPapers = {}
     local mapHides = {}
     local safePrompts = {}
     local safePromptConnections = {}
     local enemies = {}
     local espEntries = {}
-    local espEnabled = { Items = false, Enemy = false, Hide = false }
+    local espEnabled = { Items = false, Dolls = false, Enemy = false, Hide = false }
     local featureConnections = {}
     local flyActive = false
     local flySerial = 0
@@ -297,6 +314,7 @@ local initialized, initError = pcall(function()
         mapTouches[object] = nil
         mapSafes[object] = nil
         mapPapers[object] = nil
+        dollRoomPapers[object] = nil
         mapHides[object] = nil
         safePrompts[object] = nil
         local connection = safePromptConnections[object]
@@ -313,6 +331,8 @@ local initialized, initError = pcall(function()
             mapSafes[object] = true
         elseif (object:IsA("Model") or object:IsA("BasePart")) and object.Name == "HintPaper" then
             mapPapers[object] = true
+        elseif object.Name == "Paper" and object.Parent and object.Parent.Name == "DollHouseGimic" then
+            dollRoomPapers[object] = true
         elseif object:IsA("Model") and object.Name == "HideTansu" then
             mapHides[object] = true
         elseif object:IsA("BasePart") and (object.Name == "EventArea" or object.Name == "closePart") then
@@ -346,6 +366,7 @@ local initialized, initError = pcall(function()
         table.clear(mapTouches)
         table.clear(mapSafes)
         table.clear(mapPapers)
+        table.clear(dollRoomPapers)
         table.clear(mapHides)
         table.clear(safePrompts)
         mapFolder = folder
@@ -816,6 +837,11 @@ local initialized, initError = pcall(function()
                 end
             end
         end
+        if espEnabled.Dolls then
+            for doll, title in pairs(dolls) do
+                wanted[doll] = { "Dolls", title, Color3.fromRGB(0, 255, 100) }
+            end
+        end
         if espEnabled.Enemy then
             for enemy in pairs(enemies) do wanted[enemy] = { "Enemy", "Petapeta", Color3.fromRGB(255, 50, 50) } end
         end
@@ -958,6 +984,13 @@ local initialized, initError = pcall(function()
         if value then
             refreshPaths()
             if not next(keys) and not next(boxes) and not next(mapPapers) and not next(mapSafes) then notify("Chưa tìm thấy items; ESP sẽ tiếp tục chờ.") end
+        end
+    end) })
+    EspSection:AddToggle("EspDolls", { Title = "ESP Doll", Default = false, Callback = runCallback(function(value)
+        espEnabled.Dolls = value
+        if value then
+            refreshPaths()
+            if not next(dolls) then notify("Chưa tìm thấy Doll hoặc DollBlackHead; ESP sẽ tiếp tục chờ.") end
         end
     end) })
     EspSection:AddToggle("EspEnemy", { Title = "ESP Petapeta", Default = false, Callback = runCallback(function(value)
@@ -1108,6 +1141,42 @@ local initialized, initError = pcall(function()
         end)
     })
 
+    for _, name in ipairs({ "DollBlue", "DollRed", "DollWhite", "DollYellow", "DollBlackHead" }) do
+        local targetName = name
+        local title = dollNames[targetName]
+        Teleport:AddButton({
+            Title = "Teleport To " .. title,
+            Callback = runCallback(function()
+                refreshPaths()
+                local _, root = characterRoot()
+                local available = {}
+                for doll in pairs(dolls) do
+                    if doll.Parent and doll.Name == targetName then
+                        available[doll] = true
+                    end
+                end
+                local doll = nearest(available, root)
+                if not doll then
+                    error("Không tìm thấy " .. title .. " trong SpawnedItems.")
+                end
+                teleportTo(doll)
+            end)
+        })
+    end
+
+    Teleport:AddButton({
+        Title = "Teleport To Doll Room",
+        Callback = runCallback(function()
+            refreshPaths()
+            local _, root = characterRoot()
+            local paper = nearest(dollRoomPapers, root)
+            if not paper then
+                error("Không tìm thấy DollHouseGimic.Paper trong Server.MapGenerated.Rooms.")
+            end
+            teleportTo(paper)
+        end)
+    })
+
     local Aura = Main:AddSection("Collect Aura")
     local autoKeyToggle
     autoKeyToggle = Aura:AddToggle("AutoCollectKey", {
@@ -1239,6 +1308,7 @@ local initialized, initError = pcall(function()
                 restoreHold(prompt)
             end
             table.clear(boxes)
+            table.clear(dolls)
             for property, value in pairs(lightingOriginal) do
                 pcall(function()
                     Lighting[property] = value
